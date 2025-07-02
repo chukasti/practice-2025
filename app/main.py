@@ -22,6 +22,14 @@ class LoginPass(BaseModel):
     login: str
     password: str
 
+def cookie_detection(request: Request):
+    g = 0
+    session = request.cookies.get("session_id")
+    if session:
+        g += 1
+    return g
+
+
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -46,13 +54,17 @@ def read_image():
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+@app.get("/panel", response_class=HTMLResponse)
+def panel_page():
+    return 1
+
 
 @app.post("/api/login")
-async def try_login(rekvi: LoginPass, response: Response):
+async def try_login(rekvi: LoginPass, response: Response, request: Request):
     login = "makaka"
     password = "777"
     token = secrets.token_hex(32)
-    if rekvi.login == login and rekvi.password == password:
+    if rekvi.login == login and rekvi.password == password and cookie_detection(request) == 0:
         response.set_cookie(
             key="session_id",
             value=token,
@@ -63,7 +75,7 @@ async def try_login(rekvi: LoginPass, response: Response):
         )
         return "Вы успешно авторизованы."
     #добавить логирование неуспешных попыток авторизации
-    pass
+    return "Ошибка"
 
 @app.post("/api/transaction")
 async def send_transaction(transaction: TransactionNew):
