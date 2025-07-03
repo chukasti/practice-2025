@@ -4,12 +4,15 @@ from fastapi import FastAPI, Request, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import secrets
+import psycopg2
 from fastapi.responses import FileResponse
 #from models.transaction import Transaction
 #from api.v1.transactions import TransactionCreate
 from datetime import datetime
-
 from starlette.responses import HTMLResponse, FileResponse
+
+conn = psycopg2.connect("dbname=test user=postgres")
+
 
 
 class TransactionNew(BaseModel):
