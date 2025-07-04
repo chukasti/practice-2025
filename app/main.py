@@ -10,16 +10,18 @@ from fastapi.responses import FileResponse
 #from api.v1.transactions import TransactionCreate
 from datetime import datetime
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
+from datetime import datetime, timezone, timedelta
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_name password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
-
-
+cur = conn.cursor()
 class TransactionNew(BaseModel):
     id: int
-    amount: int
-    senderId: str
-    receiverId: str
+    amount: float
+    timestamp: str
+    account_id: str
+    merchant_id: str
+    status: str
 
 class LoginPass(BaseModel):
     login: str
@@ -66,7 +68,7 @@ def home_page(request: Request):
     return templates.TemplateResponse("home.html", {"request": request})
 
 @app.post("/api/login")
-async def try_login(rekvi: LoginPass, response: Response, request: Request):
+async def try_login(rekvi: LoginPass, response: Response, request: Request, tx: TransactionNew):
     login = "makaka"
     password = "777"
     token = secrets.token_hex(32)
@@ -79,6 +81,8 @@ async def try_login(rekvi: LoginPass, response: Response, request: Request):
             samesite="lax",
             secure=False
         )
+        cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
+        conn.commit()
         response.status_code = 303
         response.headers["Location"] = "/home"
         return response
@@ -86,9 +90,12 @@ async def try_login(rekvi: LoginPass, response: Response, request: Request):
     return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
 
 @app.post("/api/transaction")
-async def send_transaction(transaction: TransactionNew):
-    resulted = 1.0
-    if transaction.amount > 0:
-        resulted += transaction.amount
-    #return {"resulted": resulted}
-    return "Транзакция обработана"
+async def send_transaction(tx: TransactionNew, request: Request):
+    if tx.amount and tx.merchant_id:
+        request.cookies.get("session_id")
+
+        now = datetime.now(timezone.utc)
+        cur.execute(
+            "INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)",
+            (tx.id, tx.amount, now.isoformat(), tx.account_id, tx.merchant_id, tx.status))
+        conn.commit()
