@@ -11,6 +11,19 @@ from fastapi.responses import FileResponse
 from datetime import datetime
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
+from jose import JWTError, jwt
+
+SECRET_KEY = "_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 20
+#!!!ОБЯЗАТЕЛЬНО СЕКРЕТНЫЙ КЛЮЧ УБРАТЬ ИЗ КОДА В ENVIRONMENT!!!
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_name password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
