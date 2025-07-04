@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import secrets
@@ -9,10 +9,10 @@ from fastapi.responses import FileResponse
 #from models.transaction import Transaction
 #from api.v1.transactions import TransactionCreate
 from datetime import datetime
-from starlette.responses import HTMLResponse, FileResponse
+from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 
-conn = psycopg2.connect("dbname=test user=postgres")
-
+conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_name password=postgres_password")
+#При установке в докер - поставить надежные данные для аутентификации
 
 
 class TransactionNew(BaseModel):
@@ -61,6 +61,9 @@ def login_page(request: Request):
 def panel_page():
     return 1
 
+@app.get("/home", response_class=HTMLResponse)
+def home_page(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
 
 @app.post("/api/login")
 async def try_login(rekvi: LoginPass, response: Response, request: Request):
@@ -76,9 +79,11 @@ async def try_login(rekvi: LoginPass, response: Response, request: Request):
             samesite="lax",
             secure=False
         )
-        return "Вы успешно авторизованы."
+        response.status_code = 303
+        response.headers["Location"] = "/home"
+        return response
     #добавить логирование неуспешных попыток авторизации
-    return "Ошибка"
+    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
 
 @app.post("/api/transaction")
 async def send_transaction(transaction: TransactionNew):
