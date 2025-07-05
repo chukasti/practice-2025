@@ -98,23 +98,32 @@ def home_page(request: Request):
     return templates.TemplateResponse("home.html", {"request": request})
 
 @app.post("/api/login")
-async def try_login(rekvi: LoginPass, response: Response, request: Request, tx: TransactionNew):
-    login = "makaka"
-    password = "777"
-    token = secrets.token_hex(32)
-    if rekvi.login == login and rekvi.password == password and cookie_detection(request) == 0:
+async def try_login(auth: LoginPass, response: Response, request: Request, tx: TransactionNew):
+    if auth.login and auth.password and cookie_detection(request) == 0:
+        cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
+        row = cur.fetchone()
+        if row[0]:
+            auth.password = #зашифровать пароль и сравнить с тем, что хранится в базе данных
+        cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
+        conn.commit()
+        payload = {
+            "userid": f"{auth.login}",
+            "hashed_password": f"{auth.login}"
+        }
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        expires_at = datetime.utcnow() + timedelta(minutes=20)
+        response.status_code = 303
+        response.headers["Location"] = "/home"
         response.set_cookie(
             key="session_id",
             value=token,
             httponly=True,
-            max_age=1800,
+            max_age=1200,
+            expires=1200,
             samesite="lax",
             secure=False
         )
-        cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
-        conn.commit()
-        response.status_code = 303
-        response.headers["Location"] = "/home"
+        cur.execute("INSERT INTO active_session (userid, token, expires_at) VALUES (%s, %s, %s)", (auth.login, token, expires_at))
         return response
     #добавить логирование неуспешных попыток авторизации
     return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
