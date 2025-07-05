@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, Request, Response, status, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import secrets
@@ -12,6 +12,7 @@ from datetime import datetime
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
+from fastapi.security import OAuth2PasswordBearer
 
 SECRET_KEY = "_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
 ALGORITHM = "HS256"
@@ -24,8 +25,24 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_name password=postgres_password")
+def verify_token(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if not user_id:
+            raise JWTError()
+        return user_id
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
 class TransactionNew(BaseModel):
