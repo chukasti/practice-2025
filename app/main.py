@@ -13,10 +13,13 @@ from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
+from passlib.context import CryptContext
+
 
 SECRET_KEY = "_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 20
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 #!!!ОБЯЗАТЕЛЬНО СЕКРЕТНЫЙ КЛЮЧ УБРАТЬ ИЗ КОДА В ENVIRONMENT!!!
 
 def create_access_token(data: dict) -> str:
@@ -98,20 +101,24 @@ def home_page(request: Request):
     return templates.TemplateResponse("home.html", {"request": request})
 
 @app.post("/api/login")
-async def try_login(auth: LoginPass, response: Response, request: Request, tx: TransactionNew):
-    if auth.login and auth.password and cookie_detection(request) == 0:
+def try_login(auth: LoginPass, response: Response, request: Request):
+    if auth.login and auth.password:
         cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
         row = cur.fetchone()
-        if row[0]:
-            auth.password = #зашифровать пароль и сравнить с тем, что хранится в базе данных
-        cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
-        conn.commit()
-        payload = {
-            "userid": f"{auth.login}",
-            "hashed_password": f"{auth.login}"
-        }
-        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        if not row:
+            return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+        stored_hash = row[0]
+        if not pwd_context.verify(auth.password, stored_hash):
+            return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+        #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
+        #conn.commit()
         expires_at = datetime.utcnow() + timedelta(minutes=20)
+        payload = {
+            "userid": auth.login,
+            "exp": expires_at
+        }
+        #сделать адекватный payload
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
         response.status_code = 303
         response.headers["Location"] = "/home"
         response.set_cookie(
