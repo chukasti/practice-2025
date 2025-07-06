@@ -33,7 +33,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 def verify_token(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
+        user_id: str = payload.get("userid")
         if not user_id:
             raise JWTError()
         return user_id
@@ -82,7 +82,7 @@ def read_favicon():
 
 @app.get("/", response_class=HTMLResponse)
 def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return RedirectResponse("/home")
 
 @app.get("/images/image1.jpg")
 def read_image():
@@ -90,18 +90,51 @@ def read_image():
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
+    if request.cookies.get("session_id") is not None:
+        return RedirectResponse("/home")
+    print(request.cookies.get("session_id"))
     return templates.TemplateResponse("login.html", {"request": request})
 
-@app.get("/panel", response_class=HTMLResponse)
-def panel_page():
-    return 1
+@app.post("/api/logout")
+async def logout(response: Response, request: Request):
+    token = request.cookies.get("session_id")
+    if token:
+        cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
+        conn.commit()
+    response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie("session_id")
+    return response
+
+
+@app.get("/send_money", response_class=HTMLResponse)
+def panel_page(request: Request):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        return RedirectResponse("/login")
+    user_id = verify_token(session_id)
+
 
 @app.get("/home", response_class=HTMLResponse)
 def home_page(request: Request):
-    return templates.TemplateResponse("home.html", {"request": request})
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        return RedirectResponse("/login")
+    user_id = verify_token(session_id)
+    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+    row = cur.fetchone()
+    user_id = row[0]
+    name_surname = row[1]
+    balance = row[2]
+    if user_id is not None and name_surname:
+        return templates.TemplateResponse("home.html", {
+            "request": request,
+            "fullname": name_surname,
+            "balance": balance
+        })
+    return RedirectResponse("/login")
 
 @app.post("/api/login")
-def try_login(auth: LoginPass, response: Response, request: Request):
+def try_login(auth: LoginPass, request: Request):
     if auth.login and auth.password:
         cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
         row = cur.fetchone()
@@ -117,8 +150,8 @@ def try_login(auth: LoginPass, response: Response, request: Request):
             "userid": auth.login,
             "exp": expires_at
         }
-        #сделать адекватный payload
         token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+        response = RedirectResponse("/home", status_code=status.HTTP_303_SEE_OTHER)
         response.status_code = 303
         response.headers["Location"] = "/home"
         response.set_cookie(
@@ -133,15 +166,18 @@ def try_login(auth: LoginPass, response: Response, request: Request):
         cur.execute("INSERT INTO active_session (userid, token, expires_at) VALUES (%s, %s, %s)", (auth.login, token, expires_at))
         return response
     #добавить логирование неуспешных попыток авторизации
-    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+    return RedirectResponse(url="/login?error=invalid_credentials", status_code=303)
 
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request):
+async def send_transaction(tx: TransactionNew, request: Request, response: Response):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        return "1"
     if tx.amount and tx.merchant_id:
         request.cookies.get("session_id")
-
+        user_id = verify_token(session_id)
         now = datetime.now(timezone.utc)
         cur.execute(
             "INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)",
-            (tx.id, tx.amount, now.isoformat(), tx.account_id, tx.merchant_id, tx.status))
+            (tx.id, tx.amount, now.isoformat(), user_id, tx.merchant_id, tx.status))
         conn.commit()

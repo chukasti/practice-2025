@@ -5,6 +5,15 @@
     <title>Title</title>
 </head>
 <body>
-Вы успешно авторизованы. Добро пожаловать.
+<h1>Здравствуйте.</h1>
+<p>Вы вошли как: {{ fullname }}</p>
+<p>У вас на счету: {{ balance }}</p>
+<a href="/send_money">
+    <button type="button">Перейти к переводу</button>
+</a>
+<form action="/api/logout" method="post">
+    <button type="submit">Выйти из аккаунта</button>
+</form>
+
 </body>
 </html>

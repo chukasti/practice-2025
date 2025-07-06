@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Title</title>
+    <title>Auth page</title>
 </head>
 <body>
 <form id="authForm">
@@ -12,7 +12,7 @@
     <input type="text" id="password" required>
     <input type="submit" value="Auth">
 </form>
-
+<p>{{ message }}</p>
 <script>
     document.getElementById("authForm").addEventListener("submit", async function(e) {
         e.preventDefault();
@@ -25,12 +25,22 @@
             headers: {
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify(data)
+            body: JSON.stringify(data),
+            credentials: "include"
         });
-        const result = await response.json();
-        console.log(result);
+
+        // можно проверить статус, например:
+        if (response.ok) {
+            // после успешной авторизации — перезагружаем страницу
+            window.location.reload();
+        } else {
+            // на ошибку можно вывести сообщение
+            const error = await response.json();
+            alert(error.detail || "Ошибка авторизации");
+            // либо всё равно обновить, если нужно
+            // window.location.reload();
+        }
     });
 </script>
-
 </body>
 </html>

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<body>
+Вы уже авторизованы. Для повторной авторизации выйдите из аккаунта.
+<form id="unlogin">
+    <input type="button" value="Выйти" onclick="logout()"/>
+</form>
+<script>
+    async function logout() {
+        const response = await fetch("/api/logout", {
+            method: "POST",
+            credentials: "include"  // отправка cookie
+        });
+
+        if (response.ok) {
+            window.location.href = "/login";
+        } else {
+            alert("Ошибка при выходе");
+        }
+    }
+</script>
+</body>
+</html>
