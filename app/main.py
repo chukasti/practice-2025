@@ -1,4 +1,3 @@
-from enum import Enum
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, Response, status, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -66,7 +65,11 @@ def create_access_token(data: dict) -> str:
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def verify_token(token: str = Depends(oauth2_scheme)):
+
+def verify_token(request: Request):
+    token = request.cookies.get("session_id")
+    if not token:
+        return RedirectResponse(url="/login", status_code=303)
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("userid")
@@ -90,19 +93,13 @@ class TransactionNew(BaseModel):
     amount: float
     timestamp: str
     account_id: str
-    merchant_id: str
+    receiver_id: str
     status: str
 
 class LoginPass(BaseModel):
     login: str
     password: str
 
-def cookie_detection(request: Request):
-    g = 0
-    session = request.cookies.get("session_id")
-    if session:
-        g += 1
-    return g
 
 
 app = FastAPI()
@@ -130,7 +127,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.warning(f"Validation error: {exc.errors()}")
     return JSONResponse(
         status_code=422,
-        cpntent={"error": "Некорректные данные", "details" : str(exc)},
+        content={"error": "Некорректные данные", "details" : str(exc)},
     )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -176,22 +173,26 @@ async def logout(response: Response, request: Request):
         raise
 
 @app.get("/send_money", response_class=HTMLResponse)
-def panel_page(request: Request):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        logger.warning('Attempt to access send_money without session')
-        return RedirectResponse("/login")
-    user_id = verify_token(session_id)
-    logger.debug(f"User {user_id} accessing send_money page")
+def panel_page(request: Request, user_id: str = Depends(verify_token)):
+    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+    row = cur.fetchone()
+    user_id = row[0]
+    name_surname = row[1]
+    balance = row[2]
+    if user_id is not None and name_surname:
+        return templates.TemplateResponse("sending_page.html", {
+            "request": request,
+            "fullname": name_surname,
+            "balance": balance
+        })
+    logger.warning("user_id or name_surname is empty")
+    return RedirectResponse("/login")
+
+
 
 @app.get("/home", response_class=HTMLResponse)
-def home_page(request: Request):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        logger.warning("Attempt to access home without session")
-        return RedirectResponse("/login")
+def home_page(request: Request, user_id: str = Depends(verify_token)):
     try:
-        user_id = verify_token(session_id)
         cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
         row = cur.fetchone()
         if not row:
@@ -226,7 +227,7 @@ def try_login(auth: LoginPass, request: Request):
             if not pwd_context.verify(auth.password, stored_hash):
                 logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
+            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, receiver_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
             #conn.commit()
             expires_at = datetime.utcnow() + timedelta(minutes=20)
             payload = {
@@ -263,24 +264,7 @@ def try_login(auth: LoginPass, request: Request):
 
 
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request):
-    # 1. Проверка авторизации
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        logger.warning("Transaction attempt without session")
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Требуется авторизация"}
-        )
-
-    try:
-        user_id = verify_token(session_id)
-    except HTTPException as e:
-        logger.warning(f"Invalid token: {str(e)}")
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Недействительная сессия"}
-        )
+async def send_transaction(tx: TransactionNew, request: Request, user_id: str = Depends(verify_token)):
 
     # 2. Валидация данных
     if tx.amount <= 0:
@@ -288,6 +272,13 @@ async def send_transaction(tx: TransactionNew, request: Request):
         return JSONResponse(
             status_code=400,
             content={"error": "Сумма должна быть положительной"}
+        )
+    
+    if tx.receiver_id == user_id:
+        logger.warning(f"Attempt to send money yourself")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Вы не можете перевести деньги самому себе"}
         )
 
     try:
@@ -303,7 +294,7 @@ async def send_transaction(tx: TransactionNew, request: Request):
             WHERE u.username = %s
             FOR UPDATE
             """,
-                    (tx.merchant_id, user_id)
+                    (tx.receiver_id, user_id)
                     )
 
         result = cur.fetchone()
@@ -316,7 +307,7 @@ async def send_transaction(tx: TransactionNew, request: Request):
 
         balance, merchant_exists = result
         if not merchant_exists:
-            logger.warning(f"Invalid merchant: {tx.merchant_id}")
+            logger.warning(f"Invalid merchant: {tx.receiver_id}")
             return JSONResponse(
                 status_code=400,
                 content={"error": "Получатель не найден"}
@@ -351,9 +342,9 @@ async def send_transaction(tx: TransactionNew, request: Request):
 
         cur.execute(
             """INSERT INTO transactions 
-               (id, amount, timestamp, account_id, merchant_id, status) 
+               (id, amount, timestamp, account_id, receiver_id, status) 
                VALUES (%s, %s, %s, %s, %s, %s)""",
-            (transaction_id, tx.amount, now.isoformat(), user_id, tx.merchant_id, "completed")
+            (transaction_id, tx.amount, now.isoformat(), user_id, tx.receiver_id, "completed")
         )
 
         conn.commit()
