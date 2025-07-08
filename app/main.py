@@ -5,7 +5,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import secrets
 import psycopg2
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 #from models.transaction import Transaction
 #from api.v1.transactions import TransactionCreate
 from datetime import datetime
@@ -14,7 +15,42 @@ from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
+import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
+
+#Настройка логгера
+def setup_logger():
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+
+    logger = logging.getLogger("bank_app")
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+    file_handler = RotatingFileHandler(
+        filename=log_dir / "transactions.log",
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+logger = setup_logger()
 
 SECRET_KEY = "_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
 ALGORITHM = "HS256"
@@ -38,6 +74,7 @@ def verify_token(token: str = Depends(oauth2_scheme)):
             raise JWTError()
         return user_id
     except JWTError:
+        logger.warning('Invalid or expired token')
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -70,6 +107,32 @@ def cookie_detection(request: Request):
 
 app = FastAPI()
 
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: HTTPException):
+    logger.warning(f"404 Not Found: {request.url}")
+    return templates.TemplateResponse(
+        "error.html",
+        {"request": request, "error": "Страница не найдена", "code" : 404},
+        status_code=404
+    )
+
+@app.exception_handler(500)
+async def server_error_handler(request: Request, exc: HTTPException):
+    logger.warning(f"500 Server Error: {str(exc)}")
+    return templates.TemplateResponse(
+        "error.html",
+        {"request": request, "error": "Внутренняя ошибка сервера", "code" : 500},
+        status_code=500
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(f"Validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        cpntent={"error": "Некорректные данные", "details" : str(exc)},
+    )
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
@@ -92,92 +155,238 @@ def read_image():
 def login_page(request: Request):
     if request.cookies.get("session_id") is not None:
         return RedirectResponse("/home")
-    print(request.cookies.get("session_id"))
+    logger.debug('Accessing login page')
     return templates.TemplateResponse("login.html", {"request": request})
 
 @app.post("/api/logout")
 async def logout(response: Response, request: Request):
-    token = request.cookies.get("session_id")
-    if token:
-        cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
-        conn.commit()
-    response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
-    response.delete_cookie("session_id")
-    return response
+    try:
+        token = request.cookies.get("session_id")
+        if token:
+            user_id = verify_token(token)
+            logger.info(f"User {user_id} logging out")
+            cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
+            conn.commit()
 
+        response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+        response.delete_cookie("session_id")
+        return response
+    except Exception as e:
+        logger.error(f"Logout error: {str(e)}")
+        raise
 
 @app.get("/send_money", response_class=HTMLResponse)
 def panel_page(request: Request):
     session_id = request.cookies.get("session_id")
     if not session_id:
+        logger.warning('Attempt to access send_money without session')
         return RedirectResponse("/login")
     user_id = verify_token(session_id)
-
+    logger.debug(f"User {user_id} accessing send_money page")
 
 @app.get("/home", response_class=HTMLResponse)
 def home_page(request: Request):
     session_id = request.cookies.get("session_id")
     if not session_id:
+        logger.warning("Attempt to access home without session")
         return RedirectResponse("/login")
-    user_id = verify_token(session_id)
-    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
-    row = cur.fetchone()
-    user_id = row[0]
-    name_surname = row[1]
-    balance = row[2]
-    if user_id is not None and name_surname:
+    try:
+        user_id = verify_token(session_id)
+        cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            logger.error(f"User {user_id} not found in database")
+            return RedirectResponse("/login")
+
+        user_id = row[0]
+        name_surname = row[1]
+        balance = row[2]
+
+        logger.debug(f"User {user_id} accessing home page")
+
         return templates.TemplateResponse("home.html", {
             "request": request,
             "fullname": name_surname,
             "balance": balance
         })
-    return RedirectResponse("/login")
+    except Exception as e:
+        logger.error(f"Home page error: {str(e)}")
+        raise
 
 @app.post("/api/login")
 def try_login(auth: LoginPass, request: Request):
-    if auth.login and auth.password:
-        cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
-        row = cur.fetchone()
-        if not row:
-            return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-        stored_hash = row[0]
-        if not pwd_context.verify(auth.password, stored_hash):
-            return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-        #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
-        #conn.commit()
-        expires_at = datetime.utcnow() + timedelta(minutes=20)
-        payload = {
-            "userid": auth.login,
-            "exp": expires_at
+    try:
+        if auth.login and auth.password:
+            cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
+            row = cur.fetchone()
+            if not row:
+                logger.warning(f"Failed login attempt - user not found: {auth.login}")
+                return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+            stored_hash = row[0]
+            if not pwd_context.verify(auth.password, stored_hash):
+                logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
+                return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.merchant_id, tx.status) )
+            #conn.commit()
+            expires_at = datetime.utcnow() + timedelta(minutes=20)
+            payload = {
+                "userid": auth.login,
+                "exp": expires_at
         }
-        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-        response = RedirectResponse("/home", status_code=status.HTTP_303_SEE_OTHER)
-        response.status_code = 303
-        response.headers["Location"] = "/home"
-        response.set_cookie(
-            key="session_id",
-            value=token,
-            httponly=True,
-            max_age=1200,
-            expires=1200,
-            samesite="lax",
-            secure=False
-        )
-        cur.execute("INSERT INTO active_session (userid, token, expires_at) VALUES (%s, %s, %s)", (auth.login, token, expires_at))
-        return response
-    #добавить логирование неуспешных попыток авторизации
-    return RedirectResponse(url="/login?error=invalid_credentials", status_code=303)
+            token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+            logger.info(f"Successful login: {auth.login}")
+            response = RedirectResponse("/home", status_code=status.HTTP_303_SEE_OTHER)
+            response.set_cookie(
+                key="session_id",
+                value=token,
+                httponly=True,
+                max_age=1200,
+                expires=1200,
+                samesite="lax",
+                secure=False
+            )
+
+            cur.execute(
+                "INSERT INTO active_session (userid, token, expires_at) VALUES (%s, %s, %s)",
+                (auth.login, token, expires_at)
+            )
+            conn.commit()
+
+            return response
+
+        logger.warning("Login attempt with empty credentials")
+        return RedirectResponse(url="/login?error=invalid_credentials", status_code=303)
+
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        raise
+
 
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request, response: Response):
+async def send_transaction(tx: TransactionNew, request: Request):
+    # 1. Проверка авторизации
     session_id = request.cookies.get("session_id")
     if not session_id:
-        return "1"
-    if tx.amount and tx.merchant_id:
-        request.cookies.get("session_id")
+        logger.warning("Transaction attempt without session")
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Требуется авторизация"}
+        )
+
+    try:
         user_id = verify_token(session_id)
+    except HTTPException as e:
+        logger.warning(f"Invalid token: {str(e)}")
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Недействительная сессия"}
+        )
+
+    # 2. Валидация данных
+    if tx.amount <= 0:
+        logger.warning(f"Invalid amount from {user_id}: {tx.amount}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Сумма должна быть положительной"}
+        )
+
+    try:
+        # Начало транзакции
+        conn.autocommit = False
+        cur = conn.cursor()
+
+        # 3. Проверка получателя и баланса в одной транзакции
+        cur.execute("""
+            SELECT u.balance, m.id IS NOT NULL as merchant_exists 
+            FROM users u
+            LEFT JOIN merchants m ON m.id = %s
+            WHERE u.username = %s
+            FOR UPDATE
+            """,
+                    (tx.merchant_id, user_id)
+                    )
+
+        result = cur.fetchone()
+        if not result:
+            logger.warning(f"User not found: {user_id}")
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Пользователь не найден"}
+            )
+
+        balance, merchant_exists = result
+        if not merchant_exists:
+            logger.warning(f"Invalid merchant: {tx.merchant_id}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Получатель не найден"}
+            )
+
+        if balance < tx.amount:
+            logger.warning(f"Insufficient funds: {user_id}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Недостаточно средств", "balance": balance}
+            )
+
+        # 4. Генерация уникального ID транзакции
+        transaction_id = None
+        for _ in range(3):  # 3 попытки генерации уникального ID
+            temp_id = secrets.token_urlsafe(12)
+            cur.execute("SELECT id FROM transactions WHERE id = %s", (temp_id,))
+            if not cur.fetchone():
+                transaction_id = temp_id
+                break
+
+        if not transaction_id:
+            raise Exception("Failed to generate unique transaction ID")
+
+        # 5. Выполнение транзакции
         now = datetime.now(timezone.utc)
+
         cur.execute(
-            "INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)",
-            (tx.id, tx.amount, now.isoformat(), user_id, tx.merchant_id, tx.status))
+            "UPDATE users SET balance = balance - %s WHERE username = %s",
+            (tx.amount, user_id)
+        )
+
+        cur.execute(
+            """INSERT INTO transactions 
+               (id, amount, timestamp, account_id, merchant_id, status) 
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (transaction_id, tx.amount, now.isoformat(), user_id, tx.merchant_id, "completed")
+        )
+
         conn.commit()
+        logger.info(f"Transaction {transaction_id} completed for {user_id}")
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "transaction_id": transaction_id,
+                "new_balance": balance - tx.amount
+            }
+        )
+
+    except psycopg2.DatabaseError as db_error:
+        conn.rollback()
+        logger.error(f"Database error: {str(db_error)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Ошибка базы данных"}
+        )
+
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Внутренняя ошибка сервера"}
+        )
+
+    finally:
+        try:
+            conn.autocommit = True
+            if 'cur' in locals():
+                cur.close()
+        except Exception as e:
+            logger.error(f"Cleanup error: {str(e)}")
