@@ -1,0 +1,13 @@
+<!-- templates/error.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ошибка {{ code }}</title>
+</head>
+<body>
+    <h1>Ошибка {{ code }}</h1>
+    <p>{{ error }}</p>
+    <p>Request ID: {{ request.state.request_id }}</p>
+    <a href="/home">Вернуться на главную</a>
+</body>
+</html>
