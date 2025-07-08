@@ -66,16 +66,17 @@ def create_access_token(data: dict) -> str:
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
-def verify_token(request: Request):
+def verify_token(request: Request)  -> tuple[str, str]:
     token = request.cookies.get("session_id")
     if not token:
-        return RedirectResponse(url="/login", status_code=303)
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("userid")
+        true_user_id: str = payload.get("true_user_idd")
         if not user_id:
             raise JWTError()
-        return user_id
+        return user_id, true_user_id
     except JWTError:
         logger.warning('Invalid or expired token')
         raise HTTPException(
@@ -85,21 +86,17 @@ def verify_token(request: Request):
         )
 
 
+
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
 class TransactionNew(BaseModel):
-    id: int
-    amount: float
-    timestamp: str
-    account_id: str
+    amount: int
     receiver_id: str
-    status: str
 
 class LoginPass(BaseModel):
     login: str
     password: str
-
 
 
 app = FastAPI()
@@ -173,7 +170,9 @@ async def logout(response: Response, request: Request):
         raise
 
 @app.get("/send_money", response_class=HTMLResponse)
-def panel_page(request: Request, user_id: str = Depends(verify_token)):
+def panel_page(request: Request, token_data: tuple[str, str] = Depends(verify_token),
+):
+    user_id, true_user_id = token_data
     cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
     row = cur.fetchone()
     user_id = row[0]
@@ -191,7 +190,9 @@ def panel_page(request: Request, user_id: str = Depends(verify_token)):
 
 
 @app.get("/home", response_class=HTMLResponse)
-def home_page(request: Request, user_id: str = Depends(verify_token)):
+def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_token),
+):
+    user_id, true_user_id = token_data
     try:
         cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
         row = cur.fetchone()
@@ -218,20 +219,22 @@ def home_page(request: Request, user_id: str = Depends(verify_token)):
 def try_login(auth: LoginPass, request: Request):
     try:
         if auth.login and auth.password:
-            cur.execute("SELECT hashed_password FROM users WHERE username = %s", (auth.login,))
+            cur.execute("SELECT hashed_password, user_id FROM users WHERE username = %s", (auth.login,))
             row = cur.fetchone()
             if not row:
                 logger.warning(f"Failed login attempt - user not found: {auth.login}")
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
             stored_hash = row[0]
+            true_user_id = row[1]
             if not pwd_context.verify(auth.password, stored_hash):
                 logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, receiver_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
+            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
             #conn.commit()
             expires_at = datetime.utcnow() + timedelta(minutes=20)
             payload = {
                 "userid": auth.login,
+                "true_user_idd": true_user_id,
                 "exp": expires_at
         }
             token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -264,7 +267,8 @@ def try_login(auth: LoginPass, request: Request):
 
 
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request, user_id: str = Depends(verify_token)):
+async def send_transaction(tx: TransactionNew, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
+    user_id, true_user_id = token_data
 
     # 2. Валидация данных
     if tx.amount <= 0:
@@ -274,7 +278,7 @@ async def send_transaction(tx: TransactionNew, request: Request, user_id: str = 
             content={"error": "Сумма должна быть положительной"}
         )
     
-    if tx.receiver_id == user_id:
+    if tx.receiver_id == true_user_id:
         logger.warning(f"Attempt to send money yourself")
         return JSONResponse(
             status_code=400,
@@ -282,19 +286,19 @@ async def send_transaction(tx: TransactionNew, request: Request, user_id: str = 
         )
 
     try:
-        # Начало транзакции
-        conn.autocommit = False
-        cur = conn.cursor()
 
         # 3. Проверка получателя и баланса в одной транзакции
         cur.execute("""
-            SELECT u.balance, m.id IS NOT NULL as merchant_exists 
-            FROM users u
-            LEFT JOIN merchants m ON m.id = %s
-            WHERE u.username = %s
-            FOR UPDATE
+            SELECT
+                u.balance,
+                (r.user_id IS NOT NULL) AS receiver_exists
+            FROM users AS u
+            LEFT JOIN users AS r
+                ON r.user_id = %s      -- проверяем получателя
+            WHERE u.user_id = %s      -- блокируем отправителя
+            FOR UPDATE OF u
             """,
-                    (tx.receiver_id, user_id)
+                    (tx.receiver_id, true_user_id)
                     )
 
         result = cur.fetchone()
@@ -341,10 +345,15 @@ async def send_transaction(tx: TransactionNew, request: Request, user_id: str = 
         )
 
         cur.execute(
+            "UPDATE users SET balance = balance + %s WHERE username = %s",
+            (tx.amount, tx.receiver_id)
+        )
+
+        cur.execute(
             """INSERT INTO transactions 
-               (id, amount, timestamp, account_id, receiver_id, status) 
+               (id, amount, timestamp, account_id, merchant_id, status) 
                VALUES (%s, %s, %s, %s, %s, %s)""",
-            (transaction_id, tx.amount, now.isoformat(), user_id, tx.receiver_id, "completed")
+            (transaction_id, tx.amount, now.isoformat(), true_user_id, tx.receiver_id, "completed")
         )
 
         conn.commit()
@@ -355,7 +364,7 @@ async def send_transaction(tx: TransactionNew, request: Request, user_id: str = 
             content={
                 "status": "success",
                 "transaction_id": transaction_id,
-                "new_balance": balance - tx.amount
+                "new_balance": str(balance - tx.amount)
             }
         )
 
