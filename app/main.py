@@ -1,13 +1,9 @@
-from enum import Enum
 from pydantic import BaseModel
 from fastapi import FastAPI, Request, Response, status, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-import secrets
 import psycopg2
 from fastapi.responses import FileResponse
-#from models.transaction import Transaction
-#from api.v1.transactions import TransactionCreate
 from datetime import datetime
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
@@ -30,7 +26,10 @@ def create_access_token(data: dict) -> str:
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def verify_token(token: str = Depends(oauth2_scheme)):
+def verify_token(request: Request):
+    token = request.cookies.get("session_id")
+    if not token:
+        return RedirectResponse(url="/login", status_code=303)
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("userid")
@@ -53,7 +52,7 @@ class TransactionNew(BaseModel):
     amount: float
     timestamp: str
     account_id: str
-    merchant_id: str
+    receiver_id: str
     status: str
 
 class LoginPass(BaseModel):
@@ -107,19 +106,25 @@ async def logout(response: Response, request: Request):
 
 
 @app.get("/send_money", response_class=HTMLResponse)
-def panel_page(request: Request):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        return RedirectResponse("/login")
-    user_id = verify_token(session_id)
+def panel_page(request: Request, user_id: str = Depends(verify_token)):
+    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+    row = cur.fetchone()
+    user_id = row[0]
+    name_surname = row[1]
+    balance = row[2]
+    if user_id is not None and name_surname:
+        return templates.TemplateResponse("sending_page.html", {
+            "request": request,
+            "fullname": name_surname,
+            "balance": balance
+        })
+    return RedirectResponse("/login")
 
 
 @app.get("/home", response_class=HTMLResponse)
-def home_page(request: Request):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        return RedirectResponse("/login")
-    user_id = verify_token(session_id)
+def home_page(request: Request, user_id: str = Depends(verify_token)):
+    if isinstance(user_id, RedirectResponse):
+        return user_id
     cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
     row = cur.fetchone()
     user_id = row[0]
@@ -169,13 +174,25 @@ def try_login(auth: LoginPass, request: Request):
     return RedirectResponse(url="/login?error=invalid_credentials", status_code=303)
 
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request, response: Response):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        return "1"
-    if tx.amount and tx.merchant_id:
-        request.cookies.get("session_id")
-        user_id = verify_token(session_id)
+async def send_transaction(tx: TransactionNew, request: Request, response: Response, user_id: str = Depends(verify_token)):
+    #session_id = request.cookies.get("session_id")
+    #if not session_id:
+        #return RedirectResponse("/login")
+    #user_id = verify_token(session_id)
+    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+    row = cur.fetchone()
+    user_id = row[0]
+    name_surname = row[1]
+    balance = row[2]
+    if tx.amount and tx.receiver_id:
+        cur.execute("SELECT user_id, name_surname FROM users WHERE user_id = %s", (tx.receiver_id,))
+        rec = cur.fetchone()
+        rec_id = rec[0]
+        rec_name = rec[1]
+        if tx.amount > 0.0:
+            cur.execute("UPDATE accounts SET balance = balance + %s WHERE user_id = %s", (tx.amount, rec_id))
+            conn.commit()
+            cur.execute("UPDATE accounts SET balance = balance - %s WHERE user_id = %s", (tx.amount, user_id))
         now = datetime.now(timezone.utc)
         cur.execute(
             "INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)",

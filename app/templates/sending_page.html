@@ -3,8 +3,52 @@
 <head>
     <meta charset="UTF-8">
     <title>Отправить деньги</title>
+    <script>
+        async function handleSubmit(event) {
+            event.preventDefault();
+
+            const formData = {
+                amount: document.getElementById('amount').value,
+                receiver_id: document.getElementById('receiver_id').value
+            };
+
+            try {
+                const response = await fetch('/api/transaction', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    alert('Перевод успешно выполнен!');
+                    // Можно добавить перенаправление или обновление баланса
+                } else {
+                    const error = await response.json();
+                    alert(`Ошибка: ${error.detail || 'Неизвестная ошибка'}`);
+                }
+            } catch (error) {
+                alert('Ошибка сети: ' + error.message);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('authForm').addEventListener('submit', handleSubmit);
+        });
+    </script>
 </head>
 <body>
-
+<h1>Перевод средств</h1>
+<p>{{ fullname }}, у вас на счету: {{ balance }} фантиков.</p>
+<p>Заполните форму для осуществления перевода средств.</p>
+<form id="authForm">
+    <label for="amount">Количество фантиков для перевода:</label>
+    <input type="number" id="amount" required>
+    <label for="receiver_id">ID получателя:</label>
+    <input type="text" id="receiver_id" required>
+    <input type="submit" value="Отправить">
+</form>
 </body>
 </html>
