@@ -232,12 +232,14 @@ def try_login(auth: LoginPass, request: Request):
             if check_brute:
                 attempt_time = check_brute[1]
                 attempt_number = check_brute[2]
-                if attempt_time < now - timedelta(minutes=20) and attempt_number > 5:
-                    logger.warning(f"User overreached attempts of login")
-                    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-                else:
+                if now - attempt_time >= timedelta(minutes=20):
                     cur.execute("DELETE FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
                     conn.commit()
+
+                # 2) иначе, если попыток уже >= 5 — блокировка
+                elif attempt_number >= 5:
+                    logger.warning(f"User overreached attempts of login")
+                    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
 
             if not pwd_context.verify(auth.password, stored_hash):
                 logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
@@ -246,8 +248,10 @@ def try_login(auth: LoginPass, request: Request):
                 if brute_row:
                     last_attempt, attempt_value = brute_row
                     cur.execute("UPDATE bruteforce_protect SET last_attempt = %s, attempt_value = %s WHERE user_id = %s",(now, attempt_value+1, true_user_id))
+                    conn.commit()
                 else:
-                    cur.execute("INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)", (true_user_id, now, "1"))
+                    cur.execute("INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)", (true_user_id, now, 1))
+                    conn.commit()
                 #cur.execute("INSERT INTO bruteforce_protect user_id, last_attempt, attempt_value WHERE user_id = %s", (true_user_id,))
                 brute = cur.fetchone()
 
