@@ -73,7 +73,7 @@ def verify_token(request: Request)  -> tuple[str, str]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("userid")
-        true_user_id: str = payload.get("true_user_idd")
+        true_user_id: str = payload.get("true_userid")
         if not user_id:
             raise JWTError()
         return user_id, true_user_id
@@ -219,6 +219,7 @@ def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_tok
 def try_login(auth: LoginPass, request: Request):
     try:
         if auth.login and auth.password:
+            now = datetime.now(timezone.utc)
             cur.execute("SELECT hashed_password, user_id FROM users WHERE username = %s", (auth.login,))
             row = cur.fetchone()
             if not row:
@@ -226,15 +227,38 @@ def try_login(auth: LoginPass, request: Request):
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
             stored_hash = row[0]
             true_user_id = row[1]
+            cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+            check_brute = cur.fetchone()
+            if check_brute:
+                attempt_time = check_brute[1]
+                attempt_number = check_brute[2]
+                if attempt_time < now - timedelta(minutes=20) and attempt_number > 5:
+                    logger.warning(f"User overreached attempts of login")
+                    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+                else:
+                    cur.execute("DELETE FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+                    conn.commit()
+
             if not pwd_context.verify(auth.password, stored_hash):
                 logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
+                cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+                brute_row = cur.fetchone()
+                if brute_row:
+                    last_attempt, attempt_value = brute_row
+                    cur.execute("UPDATE bruteforce_protect SET last_attempt = %s, attempt_value = %s WHERE user_id = %s",(now, attempt_value+1, true_user_id))
+                else:
+                    cur.execute("INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)", (true_user_id, now, "1"))
+                #cur.execute("INSERT INTO bruteforce_protect user_id, last_attempt, attempt_value WHERE user_id = %s", (true_user_id,))
+                brute = cur.fetchone()
+
+
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
             #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
             #conn.commit()
             expires_at = datetime.utcnow() + timedelta(minutes=20)
             payload = {
                 "userid": auth.login,
-                "true_user_idd": true_user_id,
+                "true_userid": true_user_id,
                 "exp": expires_at
         }
             token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
