@@ -127,6 +127,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"error": "Некорректные данные", "details" : str(exc)},
     )
 
+@app.exception_handler(401)
+async def auth_exception_handler(request: Request, exc: HTTPException):
+    # обрабатываем только 401 из verify_token
+    if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+        response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+        response.delete_cookie("session_id")
+        return response
+    # остальные HTTPException передаём дальше
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
