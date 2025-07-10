@@ -286,6 +286,9 @@ def try_login(auth: LoginPass, request: Request):
                 expires=1200,
                 samesite="lax",
                 secure=False
+                #Мы не будем ставить сайт на хостинг и использовать сертификаты шифрования TLS,
+                # поэтому флаг secure в куках останется False,
+                # дабы не нарушить работу приложения.
             )
 
             cur.execute(
