@@ -17,6 +17,8 @@ from passlib.context import CryptContext
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from kafka import KafkaProducer
+import json
 
 
 #Настройка логгера
@@ -85,6 +87,11 @@ def verify_token(request: Request)  -> tuple[str, str]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9092',
+    value_serializer=lambda v: json.dumps(v).encode("utf-8")
+)
+#ДЛЯ РОМАНА
 
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
@@ -163,14 +170,13 @@ def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 @app.post("/api/logout")
-async def logout(response: Response, request: Request):
+async def logout(response: Response, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
     try:
+        user_id, true_user_id = token_data
         token = request.cookies.get("session_id")
-        if token:
-            user_id = verify_token(token)
-            logger.info(f"User {user_id} logging out")
-            cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
-            conn.commit()
+        logger.info(f"User {user_id} logging out")
+        cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
+        conn.commit()
 
         response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
         response.delete_cookie("session_id")
@@ -313,7 +319,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
 #todo: добавить защиту от флуда транзакциями
 #todo: можно было бы оптимизировать запросы в бд, но пока лень
 #todo: проверить на возможность эксплуатации CSRF
-    # 2. Валидация данных
+    payload = await request.json()
     if tx.amount <= 0:
         logger.warning(f"Invalid amount from {user_id}: {tx.amount}")
         return JSONResponse(
@@ -401,6 +407,20 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
 
         conn.commit()
         logger.info(f"Transaction {transaction_id} completed for {user_id}")
+
+        tx_data = {
+            "id": transaction_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "account_id": user_id,
+            "amount": tx.amount,
+            "status": "SUCCESS",
+            "source_ip": request.client.host,
+            "raw_payload": json.dumps(payload)
+        }
+        #ДЛЯ РОМАНА
+
+        # 3. Отправляем в Kafka
+        producer.send("transactions", tx_data)
 
         return JSONResponse(
             status_code=200,

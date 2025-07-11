@@ -44,7 +44,7 @@ def verify_token(request: Request)  -> tuple[str, str]:
     except:
         f=1
 
-conn = psycopg2.connect("dbname=b port=5430 host=localhost user=postgres_user password=postgres_password")
+conn = psycopg2.connect("dbname=b port=5431 host=localhost user=audit_user password=audit_password")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
 #todo: сделать конфиг для второй базы данных
@@ -78,9 +78,6 @@ def home_page(request: Request, response: Response, token_data: tuple[str, str] 
     user_id = row[0]
     name_surname = row[1]
     role = row[2]
-
-
-
 
     return templates.TemplateResponse("home.html", {
         "request": request,
