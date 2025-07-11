@@ -30,7 +30,7 @@ def create_access_token(data: dict) -> str:
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
-def verify_token(request: Request)  -> tuple[str, str]:
+def verify_token(request: Request)  -> tuple[str, str, str]:
     token = request.cookies.get("session_id")
     if not token:
         raise HTTPException(status_code=303, headers={"Location": "/login"})
@@ -38,9 +38,12 @@ def verify_token(request: Request)  -> tuple[str, str]:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("userid")
         true_user_id: str = payload.get("true_userid")
+        cur.execute("SELECT role FROM users WHERE username= %s",(user_id,))
+        query = cur.fetchone()
+        role = query[1]
         if not user_id:
             raise JWTError()
-        return user_id, true_user_id
+        return user_id, true_user_id, role
     except:
         f=1
 
@@ -70,9 +73,9 @@ def starting_page():
 
 
 @app.get("/home", response_class=HTMLResponse)
-def home_page(request: Request, response: Response, token_data: tuple[str, str] = Depends(verify_token),
+def home_page(request: Request, response: Response, token_data: tuple[str, str, str] = Depends(verify_token),
 ):
-    user_id, true_user_id = token_data
+    user_id, true_user_id, role = token_data
     cur.execute("SELECT username, name_surname, role FROM users WHERE username = %s", (user_id,))
     row = cur.fetchone()
     user_id = row[0]
@@ -84,6 +87,15 @@ def home_page(request: Request, response: Response, token_data: tuple[str, str] 
         "fullname": name_surname,
         "role": role
     })
+
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(request: Request, token_data: tuple[str, str, str] = Depends(verify_token),
+):
+    user_id, true_user_id, role = token_data
+    if role != "auditor":
+        return templates.TemplateResponse("not_enough_privileges.html")
+
+
 
 
 
@@ -98,6 +110,7 @@ def try_login(auth: LoginPass, request: Request):
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
             stored_hash = row[0]
             true_user_id = row[1]
+            role = row[2]
             cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
             check_brute = cur.fetchone()
             if check_brute:
@@ -164,8 +177,8 @@ def try_login(auth: LoginPass, request: Request):
         #убрать
 
 @app.post("/api/logout")
-async def logout(response: Response, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
-    user_id, true_user_id = token_data
+async def logout(response: Response, request: Request, token_data: tuple[str, str, str] = Depends(verify_token),):
+    user_id, true_user_id, role = token_data
     token = request.cookies.get("session_id")
     if token_data:
         cur.execute("DELETE FROM active_session WHERE token = %s", (token,))

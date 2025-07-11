@@ -20,6 +20,9 @@ from pathlib import Path
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 import json
+
+
+
 #Настройка кафки
 Kafka_bootstrap_servers="localhost"
 Kafka_audit_topic="audit_logs"
@@ -69,6 +72,7 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
@@ -90,8 +94,10 @@ def verify_token(request: Request)  -> tuple[str, str]:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
 #Создаем Kafka_Producer
-def Create_Kafka_Producer():
+def create_kafka_producer():
     try:
         producer = KafkaProducer(
             bootstrap_servers=Kafka_bootstrap_servers,
@@ -105,7 +111,9 @@ def Create_Kafka_Producer():
         return producer
     except Exception as e:
         logger.error(f"Failed to create Kafka producer: {str(e)}")
-producer = Create_Kafka_Producer()
+
+
+producer = create_kafka_producer()
 
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
@@ -245,6 +253,7 @@ def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_tok
         logger.error(f"Home page error: {str(e)}")
         raise
 
+
 @app.post("/api/login")
 def try_login(auth: LoginPass, request: Request):
     try:
@@ -344,7 +353,6 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         )
 
     try:
-
         # 3. Проверка получателя и баланса в одной транзакции
         cur.execute("""
             SELECT
