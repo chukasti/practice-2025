@@ -90,6 +90,7 @@ def verify_token(request: Request)  -> tuple[str, str]:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+#Создаем Kafka_Producer
 def Create_Kafka_Producer():
     try:
         producer = KafkaProducer(
