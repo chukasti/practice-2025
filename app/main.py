@@ -310,7 +310,9 @@ def try_login(auth: LoginPass, request: Request):
 @app.post("/api/transaction")
 async def send_transaction(tx: TransactionNew, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
     user_id, true_user_id = token_data
-
+#todo: добавить защиту от флуда транзакциями
+#todo: можно было бы оптимизировать запросы в бд, но пока лень
+#todo: проверить на возможность эксплуатации CSRF
     # 2. Валидация данных
     if tx.amount <= 0:
         logger.warning(f"Invalid amount from {user_id}: {tx.amount}")

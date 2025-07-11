@@ -47,12 +47,12 @@ def verify_token(request: Request)  -> tuple[str, str]:
 conn = psycopg2.connect("dbname=b port=5430 host=localhost user=postgres_user password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
-
+#todo: сделать конфиг для второй базы данных
 class LoginPass(BaseModel):
     login: str
     password: str
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="audit_templates")
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
@@ -63,6 +63,32 @@ def login_page(request: Request):
 @app.get("/", response_class=RedirectResponse)
 def starting_page():
     return RedirectResponse("/home")
+#todo: добавить home страницу аудита
+#todo: добавить панель управления, в которую кафка будет передавать инциденты
+#todo: сделать конфигурацию приложения, чтобы оно было доступно только из локальной сети
+#todo:
+
+
+@app.get("/home", response_class=HTMLResponse)
+def home_page(request: Request, response: Response, token_data: tuple[str, str] = Depends(verify_token),
+):
+    user_id, true_user_id = token_data
+    cur.execute("SELECT username, name_surname, role FROM users WHERE username = %s", (user_id,))
+    row = cur.fetchone()
+    user_id = row[0]
+    name_surname = row[1]
+    role = row[2]
+
+
+
+
+    return templates.TemplateResponse("home.html", {
+        "request": request,
+        "fullname": name_surname,
+        "role": role
+    })
+
+
 
 @app.post("/api/login")
 def try_login(auth: LoginPass, request: Request):
@@ -122,7 +148,7 @@ def try_login(auth: LoginPass, request: Request):
                 expires=1200,
                 samesite="lax",
                 secure=False
-                #Мы не будем ставить сайт на хостинг и использовать сертификаты шифрования TLS,
+                # Мы не будем использовать сертификаты шифрования TLS,
                 # поэтому флаг secure в куках останется False,
                 # дабы не нарушить работу приложения.
             )
@@ -139,3 +165,15 @@ def try_login(auth: LoginPass, request: Request):
     except:
         f=1
         #убрать
+
+@app.post("/api/logout")
+async def logout(response: Response, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
+    user_id, true_user_id = token_data
+    token = request.cookies.get("session_id")
+    if token_data:
+        cur.execute("DELETE FROM active_session WHERE token = %s", (token,))
+        conn.commit()
+
+    response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie("session_id")
+    return response
