@@ -18,8 +18,12 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from kafka import KafkaProducer
+from kafka.errors import KafkaError
 import json
-
+#Настройка кафки
+Kafka_bootstrap_servers="localhost"
+Kafka_audit_topic="audit_logs"
+Kafka_transaction_topic="transaction"
 
 #Настройка логгера
 def setup_logger():
@@ -86,12 +90,21 @@ def verify_token(request: Request)  -> tuple[str, str]:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-producer = KafkaProducer(
-    bootstrap_servers='localhost:9092',
-    value_serializer=lambda v: json.dumps(v).encode("utf-8")
-)
-#ДЛЯ РОМАНА
+def Create_Kafka_Producer():
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=Kafka_bootstrap_servers,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            acks='all',
+            retries=3,
+            max_in_flight_requests_per_connection=1,
+            request_timeout_ms=30000,
+            linger_ms=5
+        )
+        return producer
+    except Exception as e:
+        logger.error(f"Failed to create Kafka producer: {str(e)}")
+producer = Create_Kafka_Producer()
 
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
@@ -292,9 +305,6 @@ def try_login(auth: LoginPass, request: Request):
                 expires=1200,
                 samesite="lax",
                 secure=False
-                #Мы не будем ставить сайт на хостинг и использовать сертификаты шифрования TLS,
-                # поэтому флаг secure в куках останется False,
-                # дабы не нарушить работу приложения.
             )
 
             cur.execute(
@@ -316,9 +326,7 @@ def try_login(auth: LoginPass, request: Request):
 @app.post("/api/transaction")
 async def send_transaction(tx: TransactionNew, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
     user_id, true_user_id = token_data
-#todo: добавить защиту от флуда транзакциями
-#todo: можно было бы оптимизировать запросы в бд, но пока лень
-#todo: проверить на возможность эксплуатации CSRF
+
     payload = await request.json()
     if tx.amount <= 0:
         logger.warning(f"Invalid amount from {user_id}: {tx.amount}")
