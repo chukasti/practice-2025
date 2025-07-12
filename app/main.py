@@ -106,7 +106,7 @@ def Create_Kafka_Producer():
     except Exception as e:
         logger.error(f"Failed to create Kafka producer: {str(e)}")
 producer = Create_Kafka_Producer()
-async def send_kafka(topic, message):
+async def send_kafka(topic, massage):
     try:
         future = producer.send(topic, value=massage)
         metadata = future.get(timeout=10)
