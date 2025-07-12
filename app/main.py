@@ -450,6 +450,16 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         )
 
     except psycopg2.DatabaseError as db_error:
+        tx_data = {
+            "id": transaction_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "account_id": user_id,
+            "amount": tx.amount,
+            "status": "SUCCESS",
+            "source_ip": request.client.host,
+            "raw_payload": json.dumps(payload)
+        }
+        await send_kafka(Kafka_audit_topic, tx_data)
         conn.rollback()
         logger.error(f"Database error: {str(db_error)}")
         return JSONResponse(
@@ -458,6 +468,16 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         )
 
     except Exception as e:
+        tx_data = {
+            "id": transaction_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "account_id": user_id,
+            "amount": tx.amount,
+            "status": "SUCCESS",
+            "source_ip": request.client.host,
+            "raw_payload": json.dumps(payload)
+        }
+        await send_kafka(Kafka_audit_topic, tx_data)
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=500,
