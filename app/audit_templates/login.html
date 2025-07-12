@@ -7,50 +7,60 @@
 <body>
 <form id="authForm">
     <label for="login">Login:</label>
-    <input type="text" id="login" required>
+    <input type="text" id="login" name="login" required>
+
     <label for="password">Password:</label>
-    <input type="text" id="password" required>
+    <input type="text" id="password" name="password" required>
+
+    <input type="hidden" id="csrf_token" name="csrf_token" value="{{ csrf_token }}">
+
     <input type="submit" value="Auth">
 </form>
-<p>{{ message }}</p>
-<p> {{ error }}</p>
-<script>
-    document.getElementById("authForm").addEventListener("submit", async function(e) {
-        e.preventDefault();
-        const data = {
-            login: document.getElementById("login").value,
-            password: document.getElementById("password").value
-        };
-        const response = await fetch("/api/login", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify(data),
-            credentials: "include"
-        });
 
-        // можно проверить статус, например:
-        if (response.ok) {
-            // после успешной авторизации — перезагружаем страницу
-            window.location.reload();
-        } else {
-            // на ошибку можно вывести сообщение
+<p id="error-message">{{ error }}</p>
+
+<script>
+document.getElementById("authForm").addEventListener("submit", async function(e) {
+    e.preventDefault();
+
+    const login = document.getElementById("login").value;
+    const password = document.getElementById("password").value;
+    const csrfToken = document.getElementById("csrf_token").value;
+
+    const data = {
+        login: login,
+        password: password,
+        csrf_token: csrfToken
+    };
+
+    const response = await fetch("/api/login", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        window.location.href = "/home";
+    } else {
+        try {
             const error = await response.json();
             alert(error.detail || "Ошибка авторизации");
-            // либо всё равно обновить, если нужно
-            // window.location.reload();
+        } catch {
+            alert("Ошибка авторизации");
         }
-    });
-</script>
-<script>
-  const params = new URLSearchParams(window.location.search);
-  const error = params.get('error');
-  if (error === 'invalid_credentials') {
-    document.getElementById('error-message').textContent = 'Неверный логин или пароль';
-  }
+    }
+});
 </script>
 
-<div id="error-message"></div>
+<script>
+const params = new URLSearchParams(window.location.search);
+const error = params.get('error');
+if (error === 'invalid_credentials') {
+    document.getElementById('error-message').textContent = 'Неверный логин или пароль';
+}
+</script>
 </body>
 </html>

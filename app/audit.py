@@ -1,6 +1,8 @@
 import os
 import secrets
+from urllib.parse import quote_plus
 import ipaddress
+from dotenv import load_dotenv
 import logging
 from typing import Optional, Tuple, List
 from datetime import datetime, timezone, timedelta
@@ -14,9 +16,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import psycopg2
-from pydantic import BaseModel, BaseSettings
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 from kafka import KafkaConsumer
 import json
+from pydantic import Field
 
 # Настройка логгера
 logger = logging.getLogger("security")
@@ -25,25 +29,41 @@ handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
+load_dotenv()
 
 class Settings(BaseSettings):
-    secret_key: str
-    db_host: str = "localhost"
-    db_port: str = "5432"
-    db_name: str
-    db_user: str
-    db_password: str
-    kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_topic: str = "incidents"
-    allowed_hosts: str = "127.0.0.1,localhost"
-    allowed_ips: str = "127.0.0.1,192.168.1.0/24"
+    # ── JWT / FastAPI ─────────────────────────────────────────
+    secret_key: str = Field(..., env="SECRET_KEY")
+    algorithm: str = Field("HS256", env="ALGORITHM")
+    access_token_expire_minutes: int = Field(20, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+
+    # ── PostgreSQL ────────────────────────────────────────────
+    postgres_host: str = Field("db", env="POSTGRES_HOST")
+    postgres_port: int = Field(5433, env="POSTGRES_PORT")
+    postgres_db: str = Field(..., env="POSTGRES_DB")
+    postgres_user: str = Field(..., env="POSTGRES_USER")
+    postgres_password: str = Field(..., env="POSTGRES_PASSWORD")
+
+    # ── Kafka ────────────────────────────────────────────────
+    kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
+    kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
+
+    # ── CORS / ACL ───────────────────────────────────────────
+    allowed_hosts: str = Field("127.0.0.1,localhost", env="ALLOWED_HOSTS")
+    allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
 
 
+SECRET_KEY="_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
+# Инициализация
 settings = Settings()
+
+
+
+
 
 
 # Реализация CSRF защиты
@@ -58,22 +78,24 @@ class CSRFProtect:
         if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
             return
 
-        form_data = await request.form()
-        form_token = form_data.get("csrf_token")
-        header_token = request.headers.get("x-csrf-token")
+        json_data = await request.json()
+        form_token = json_data.get("csrf_token")
+
         cookie_token = request.cookies.get(self.cookie_name)
 
-        if not any([form_token, header_token]):
+        if not any([form_token]):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="CSRF token missing"
             )
 
-        if not cookie_token or (form_token != cookie_token and header_token != cookie_token):
+        if not cookie_token or (form_token != cookie_token):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invalid CSRF token"
             )
+
+csrf = CSRFProtect()
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -129,14 +151,17 @@ except Exception as e:
 
 
 def get_db_connection():
+    safe_password = quote_plus(settings.postgres_password)
     try:
-        conn = psycopg2.connect(
-            dbname=settings.db_name,
-            host=settings.db_host,
-            port=settings.db_port,
-            user=settings.db_user,
-            password=settings.db_password
+        #todo: ПОЧИНИТЕ ЭТОТ ГОВНОКОД, ИЗ-ЗА КОТОРОГО НЕТ ПОДКЛЮЧЕНИЯ К БД
+        conn_str = (
+            f"dbname='{quote_plus(settings.postgres_db)}' "
+            f"user='{quote_plus(settings.postgres_user)}' "
+            f"password='{quote_plus(settings.postgres_password)}' "
+            f"host='{quote_plus(settings.postgres_host)}' "
+            f"port='{settings.postgres_port}'"
         )
+        conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
         return conn
     except Exception as e:
@@ -144,7 +169,7 @@ def get_db_connection():
         raise
 
 
-class LoginForm(BaseModel):
+class LoginPass(BaseModel):
     login: str
     password: str
 
@@ -157,7 +182,7 @@ class Incident(BaseModel):
     status: str
 
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="audit_templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -187,7 +212,7 @@ async def verify_origin(request: Request):
             )
 
 
-async def get_current_user(request: Request) -> Tuple[str, str, str]:
+async def verify_token(request: Request) -> Tuple[str, str, str]:
     token = request.cookies.get("session_id")
     if not token:
         raise HTTPException(
@@ -250,31 +275,37 @@ async def root():
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+async def login_page(request: Request, response: Response):
     if request.cookies.get("session_id"):
         return RedirectResponse("/home", status_code=status.HTTP_303_SEE_OTHER)
 
-    return templates.TemplateResponse(
+
+    csrf_token= csrf.generate_token()
+    response = templates.TemplateResponse(
         "login.html",
         {
             "request": request,
-            "csrf_token": get_csrf_token(request),
+            "csrf_token": csrf_token,
             "warning": "Приложение работает без HTTPS. Не используйте реальные данные!"
         }
     )
+    response.set_cookie(
+        key=csrf.cookie_name,
+        value=csrf_token,
+        httponly=True,
+        samesite="strict"
+    )
+    return response
 
 
 @app.post("/api/login")
 async def login(
-        request: Request,
-        login: str = Form(...),
-        password: str = Form(...)
-):
+        request: Request, auth: LoginPass):
     await verify_origin(request)
     await csrf_protect.validate_request(request)
 
     try:
-        if not login or not password:
+        if not auth.login or not auth.password:
             return RedirectResponse(
                 "/login?error=empty_fields",
                 status_code=status.HTTP_303_SEE_OTHER
@@ -287,7 +318,7 @@ async def login(
                 # Проверка учетных данных
                 cur.execute(
                     "SELECT hashed_password, user_id, role FROM users WHERE username = %s",
-                    (login,)
+                    (auth.login,)
                 )
                 user_data = cur.fetchone()
 
@@ -314,7 +345,7 @@ async def login(
                     )
 
 
-                if not pwd_context.verify(password, stored_hash):
+                if not pwd_context.verify(auth.password, stored_hash):
                     if brute_data:
                         cur.execute(
                             """UPDATE bruteforce_protect 
@@ -338,7 +369,7 @@ async def login(
 
                 expires_at = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
                 token = create_access_token({
-                    "userid": login,
+                    "userid": auth.login,
                     "true_userid": true_user_id,
                     "exp": expires_at
                 })
@@ -354,7 +385,7 @@ async def login(
                     """INSERT INTO active_session 
                     (userid, token, expires_at) 
                     VALUES (%s, %s, %s)""",
-                    (login, token, expires_at)
+                    (auth.login, token, expires_at)
                 )
                 conn.commit()
 
@@ -398,7 +429,7 @@ async def login(
 @app.get("/home", response_class=HTMLResponse)
 async def home_page(
         request: Request,
-        user_data: Tuple[str, str, str] = Depends(get_current_user)
+        user_data: Tuple[str, str, str] = Depends(verify_token)
 ):
     user_id, true_user_id, role = user_data
 
@@ -435,7 +466,7 @@ async def home_page(
 @app.post("/api/logout")
 async def logout(
         request: Request,
-        user_data: Tuple[str, str, str] = Depends(get_current_user)
+        user_data: Tuple[str, str, str] = Depends(verify_token)
 ):
     token = request.cookies.get("session_id")
     if token:
@@ -459,7 +490,7 @@ async def logout(
 @app.get("/audit", response_class=HTMLResponse)
 async def audit_page(
         request: Request,
-        user_data: Tuple[str, str, str] = Depends(get_current_user)
+        user_data: Tuple[str, str, str] = Depends(verify_token)
 ):
     user_id, true_user_id, role = user_data
 
@@ -481,7 +512,7 @@ async def audit_page(
 @app.post("/api/incidents")
 async def get_incidents(
         request: Request,
-        user_data: Tuple[str, str, str] = Depends(get_current_user)
+        user_data: Tuple[str, str, str] = Depends(verify_token)
 ):
     await verify_origin(request)
     await csrf_protect.validate_request(request)

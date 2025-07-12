@@ -14,12 +14,15 @@ from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-import logging
+import app_logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 import json
+
+
+
 #Настройка кафки
 Kafka_bootstrap_servers="localhost"
 Kafka_audit_topic="audit_logs"
@@ -30,10 +33,10 @@ def setup_logger():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    logger = logging.getLogger("bank_app")
-    logger.setLevel(logging.INFO)
+    logger = app_logging.getLogger("bank_app")
+    logger.setLevel(app_logging.INFO)
 
-    formatter = logging.Formatter(
+    formatter = app_logging.Formatter(
         '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
@@ -46,7 +49,7 @@ def setup_logger():
     )
     file_handler.setFormatter(formatter)
 
-    console_handler = logging.StreamHandler()
+    console_handler = app_logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
@@ -91,7 +94,7 @@ def verify_token(request: Request)  -> tuple[str, str]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 #Создаем Kafka_Producer
-def Create_Kafka_Producer():
+def create_kafka_producer():
     try:
         producer = KafkaProducer(
             bootstrap_servers=Kafka_bootstrap_servers,
@@ -105,7 +108,7 @@ def Create_Kafka_Producer():
         return producer
     except Exception as e:
         logger.error(f"Failed to create Kafka producer: {str(e)}")
-producer = Create_Kafka_Producer()
+producer = create_kafka_producer()
 async def send_kafka(topic, massage):
     try:
         future = producer.send(topic, value=massage)
