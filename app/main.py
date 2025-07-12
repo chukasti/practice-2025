@@ -106,7 +106,17 @@ def Create_Kafka_Producer():
     except Exception as e:
         logger.error(f"Failed to create Kafka producer: {str(e)}")
 producer = Create_Kafka_Producer()
-
+async def send_kafka(topic, message):
+    try:
+        future = producer.send(topic, value=massage)
+        metadata = future.get(timeout=10)
+        logger.info(f"Message sent to Kafka: topic = {metadata.topic}, "
+                    f"partition = {metadata.partition}, "
+                    f"offest = {metadata.offset}")
+        return True
+    except  KafkaError as e:
+        logger.error(f"Failed to send massage to kafka: {str(e)}")
+        return False
 
 conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
 #При установке в докер - поставить надежные данные для аутентификации
@@ -426,10 +436,9 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             "source_ip": request.client.host,
             "raw_payload": json.dumps(payload)
         }
-        #ДЛЯ РОМАНА
 
         # 3. Отправляем в Kafka
-        producer.send("transactions", tx_data)
+        await send_kafka(Kafka_transaction_topic, tx_data)
 
         return JSONResponse(
             status_code=200,
