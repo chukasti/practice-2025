@@ -1,29 +1,31 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Title</title>
+    <title>Панель Аудита</title>
 </head>
 <body>
-<h1>Здравствуйте.</h1>
-<p>Вы вошли как: {{ fullname }}</p>
-<p>Ваша роль: {{ role }}</p>
-<a href="/audit">
-    <button type="button">Перейти к журналу аудита</button>
-</a>
-<form action="/api/logout" method="post">
-    <button type="submit">Выйти из аккаунта</button>
-</form>
-<script>
-  const role = "{{ role }}";
-  if (role !== "auditor") {
-    const warning = document.createElement("div");
-    warning.textContent = "Права доступа ограничены. Обратитесь к администратору.";
-    warning.style.color = "red";
-    warning.style.fontWeight = "bold";
-    warning.style.marginTop = "20px";
-    document.body.prepend(warning);
-  }
-</script>
-</body>
-</html>
+    <h1>Добро пожаловать, {{ fullname }}</h1>
+    <p>Ваша роль: {{ role }}</p>
+
+    {% if role != "auditor" %}
+        <p style="color:red;">Права доступа ограничены. Обратитесь к администратору.</p>
+    {% endif %}
+
+    <h2>Последние инциденты:</h2>
+    {% if incidents %}
+        <ul>
+        {% for incident in incidents %}
+            <li>
+                <strong>Time:</strong> {{ incident.timestamp }} |
+                <strong>User:</strong> {{ incident.user_id }} |
+                <strong>Type:</strong> {{ incident.event_type }} |
+                <strong>IP:</strong> {{ incident.source_ip }}
+            </li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <p>Нет новых инцидентов.</p>
+    {% endif %}
+
+    <!-- Прим

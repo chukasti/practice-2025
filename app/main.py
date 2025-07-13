@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
-import app_logging
+import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from kafka import KafkaProducer
@@ -33,10 +33,10 @@ def setup_logger():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    logger = app_logging.getLogger("bank_app")
-    logger.setLevel(app_logging.INFO)
+    logger = logging.getLogger("bank_app")
+    logger.setLevel(logging.INFO)
 
-    formatter = app_logging.Formatter(
+    formatter = logging.Formatter(
         '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
@@ -49,7 +49,7 @@ def setup_logger():
     )
     file_handler.setFormatter(formatter)
 
-    console_handler = app_logging.StreamHandler()
+    console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
     logger.addHandler(file_handler)
@@ -289,14 +289,14 @@ def try_login(auth: LoginPass, request: Request):
                 cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
                 brute_row = cur.fetchone()
                 if brute_row:
-                    last_attempt, attempt_value = brute_row
+                    kk, last_attempt, attempt_value = brute_row
                     cur.execute("UPDATE bruteforce_protect SET last_attempt = %s, attempt_value = %s WHERE user_id = %s",(now, attempt_value+1, true_user_id))
                     conn.commit()
                 else:
                     cur.execute("INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)", (true_user_id, now, 1))
                     conn.commit()
                 #cur.execute("INSERT INTO bruteforce_protect user_id, last_attempt, attempt_value WHERE user_id = %s", (true_user_id,))
-                brute = cur.fetchone()
+                #brute = cur.fetchone()
 
 
                 return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
@@ -340,7 +340,7 @@ def try_login(auth: LoginPass, request: Request):
 @app.post("/api/transaction")
 async def send_transaction(tx: TransactionNew, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
     user_id, true_user_id = token_data
-
+    transaction_id = None
     payload = await request.json()
     if tx.amount <= 0:
         logger.warning(f"Invalid amount from {user_id}: {tx.amount}")
@@ -361,8 +361,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         # 3. Проверка получателя и баланса в одной транзакции
         cur.execute("""
             SELECT
-                u.balance,
-                (r.user_id IS NOT NULL) AS receiver_exists
+                u.balance, (r.user_id IS NOT NULL), r.account_status AS receiver_exists
             FROM users AS u
             LEFT JOIN users AS r
                 ON r.user_id = %s      -- проверяем получателя
@@ -380,7 +379,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
                 content={"error": "Пользователь не найден"}
             )
 
-        balance, merchant_exists = result
+        balance, merchant_exists, receiver_account_status = result
         if not merchant_exists:
             logger.warning(f"Invalid merchant: {tx.receiver_id}")
             return JSONResponse(
@@ -392,11 +391,16 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             logger.warning(f"Insufficient funds: {user_id}")
             return JSONResponse(
                 status_code=400,
-                content={"error": "Недостаточно средств", "balance": balance}
+                content={"error": "Недостаточно средств", "balance": float(balance)}
             )
 
+        if receiver_account_status != "normal":
+            logger.warning(f"Попытка отправить деньги аккаунту {tx.receiver_id} с ограниченными привилегиями")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Аккаунт получателя ограничен. Невозможно отправить деньги."}
+            )
         # 4. Генерация уникального ID транзакции
-        transaction_id = None
         for _ in range(3):  # 3 попытки генерации уникального ID
             temp_id = secrets.token_urlsafe(12)
             cur.execute("SELECT id FROM transactions WHERE id = %s", (temp_id,))
@@ -416,7 +420,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         )
 
         cur.execute(
-            "UPDATE users SET balance = balance + %s WHERE username = %s",
+            "UPDATE users SET balance = balance + %s WHERE user_id = %s",
             (tx.amount, tx.receiver_id)
         )
 

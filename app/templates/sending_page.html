@@ -1,54 +1,74 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <title>Отправить деньги</title>
-    <script>
-        async function handleSubmit(event) {
-            event.preventDefault();
-
-            const formData = {
-                amount: document.getElementById('amount').value,
-                receiver_id: document.getElementById('receiver_id').value
-            };
-
-            try {
-                const response = await fetch('/api/transaction', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    alert('Перевод успешно выполнен!');
-                    // Можно добавить перенаправление или обновление баланса
-                } else {
-                    const error = await response.json();
-                    alert(`Ошибка: ${error.detail || 'Неизвестная ошибка'}`);
-                }
-            } catch (error) {
-                alert('Ошибка сети: ' + error.message);
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('authForm').addEventListener('submit', handleSubmit);
-        });
-    </script>
 </head>
 <body>
-<h1>Перевод средств</h1>
-<p>{{ fullname }}, у вас на счету: {{ balance }} фантиков.</p>
-<p>Заполните форму для осуществления перевода средств.</p>
-<form id="authForm">
-    <label for="amount">Количество фантиков для перевода:</label>
-    <input type="number" id="amount" required>
-    <label for="receiver_id">ID получателя:</label>
-    <input type="text" id="receiver_id" required>
-    <input type="submit" value="Отправить">
-</form>
+    <h1>Перевод средств</h1>
+    <p>{{ fullname }}, у вас на счету: {{ balance }} фантиков.</p>
+    <p>Заполните форму для осуществления перевода средств.</p>
+
+    <form id="transactionForm">
+        <label for="amount">Количество фантиков для перевода:</label>
+        <input type="number" id="amount" name="amount" required>
+
+        <label for="receiver_id">ID получателя:</label>
+        <input type="text" id="receiver_id" name="receiver_id" required>
+
+        <p><button type="submit">Отправить</button></p>
+    </form>
+
+    <p id="message"></p>
+
+    <script>
+    document.getElementById("transactionForm").addEventListener("submit", async function(e) {
+        e.preventDefault();
+
+        const data = {
+            amount: parseFloat(document.getElementById("amount").value),
+            receiver_id: document.getElementById("receiver_id").value
+        };
+
+        let response;
+        try {
+            response = await fetch("/api/transaction", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                credentials: "include",
+                body: JSON.stringify(data)
+            });
+        } catch (networkError) {
+            document.getElementById("message").textContent = "Ошибка сети: " + networkError.message;
+            document.getElementById("message").style.color = "red";
+            return;
+        }
+
+        const messageEl = document.getElementById("message");
+
+        if (response.ok) {
+            const result = await response.json();
+            messageEl.textContent = "Перевод успешно выполнен!";
+            messageEl.style.color = "green";
+            setTimeout(() => {
+               window.location.reload();
+        }, 1000);
+            // можно обновить баланс, перезагрузить страницу и т.д.
+        } else {
+            let err;
+            try {
+                err = await response.json();
+            } catch {
+                messageEl.textContent = "Ошибка сервера: некорректный ответ";
+                messageEl.style.color = "red";
+                return;
+            }
+            messageEl.textContent = `Ошибка: ${err.error || err.detail || "Неизвестная ошибка"}`;
+            messageEl.style.color = "red";
+        }
+    });
+    </script>
 </body>
 </html>

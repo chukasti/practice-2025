@@ -131,7 +131,7 @@ def home_page(request: Request, user_id: str = Depends(verify_token)):
     name_surname = row[1]
     balance = row[2]
     if user_id is not None and name_surname:
-        return templates.TemplateResponse("home.html", {
+        return templates.TemplateResponse("home_old.html", {
             "request": request,
             "fullname": name_surname,
             "balance": balance
