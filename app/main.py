@@ -237,22 +237,25 @@ def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_tok
 ):
     user_id, true_user_id = token_data
     try:
-        cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+        cur.execute("SELECT username, name_surname, balance, account_status FROM users WHERE username = %s", (user_id,))
         row = cur.fetchone()
         if not row:
             logger.error(f"User {user_id} not found in database")
             return RedirectResponse("/login")
 
-        user_id = row[0]
-        name_surname = row[1]
-        balance = row[2]
+        user_id, name_surname, balance, account_status = row
+        if account_status != "normal":
+            restrict_warning = "Ваш аккаунт имеет ограничения на осуществление операций. Обратитесь в службу поддержки."
+        else:
+            restrict_warning = None
 
         logger.debug(f"User {user_id} accessing home page")
 
         return templates.TemplateResponse("home.html", {
             "request": request,
             "fullname": name_surname,
-            "balance": balance
+            "balance": balance,
+            "restrict_warning": restrict_warning
         })
     except Exception as e:
         logger.error(f"Home page error: {str(e)}")
@@ -361,7 +364,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
         # 3. Проверка получателя и баланса в одной транзакции
         cur.execute("""
             SELECT
-                u.balance, (r.user_id IS NOT NULL), r.account_status AS receiver_exists
+                u.balance, (r.user_id IS NOT NULL), r.account_status, u.account_status AS receiver_exists
             FROM users AS u
             LEFT JOIN users AS r
                 ON r.user_id = %s      -- проверяем получателя
@@ -379,7 +382,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
                 content={"error": "Пользователь не найден"}
             )
 
-        balance, merchant_exists, receiver_account_status = result
+        balance, merchant_exists, receiver_account_status, user_account_status = result
         if not merchant_exists:
             logger.warning(f"Invalid merchant: {tx.receiver_id}")
             return JSONResponse(
@@ -395,10 +398,16 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             )
 
         if receiver_account_status != "normal":
-            logger.warning(f"Попытка отправить деньги аккаунту {tx.receiver_id} с ограниченными привилегиями")
+            logger.warning(f"Попытка отправить деньги аккаунту ID {tx.receiver_id} с ограниченными привилегиями")
             return JSONResponse(
                 status_code=400,
                 content={"error": "Аккаунт получателя ограничен. Невозможно отправить деньги."}
+            )
+        if user_account_status != "normal":
+            logger.warning(f"Пользователь с ограниченным аккаунтом ID {true_user_id} попытался отправить деньги")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Ваш аккаунт ограничен. Свяжитесь со службой поддержки."}
             )
         # 4. Генерация уникального ID транзакции
         for _ in range(3):  # 3 попытки генерации уникального ID

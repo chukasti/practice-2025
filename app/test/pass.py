@@ -3,7 +3,7 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Регистрация — хэшируем
-password_plain = "asd"
+password_plain = "omega"
 password_hashed = pwd_context.hash(password_plain)
 # Сохраняем password_hashed в БД
 print(password_hashed)
