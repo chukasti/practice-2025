@@ -22,6 +22,7 @@ from kafka import KafkaConsumer
 import json
 from pydantic import Field
 
+
 # Настройка логгера
 logger = logging.getLogger("security")
 logger.setLevel(logging.WARNING)
@@ -161,6 +162,7 @@ def get_db_connection():
             f"host='{quote_plus(settings.postgres_host)}' "
             f"port='{settings.postgres_port}'"
         )
+        #conn = psycopg2.connect(conn_str)
         conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
         return conn
@@ -450,6 +452,9 @@ async def home_page(
                 incidents.append(Incident(**msg.value))
     except StopIteration:
         pass
+    #todo: события должны читаться из БД аудита, потому что...
+    #todo: ...main app передает логи в кафку, кафка передаёт логи в ...
+    #todo: ...БД аудита.
 
     return templates.TemplateResponse(
         "home.html",

@@ -24,7 +24,7 @@ import json
 
 
 #Настройка кафки
-Kafka_bootstrap_servers="localhost"
+Kafka_bootstrap_servers="localhost:9092"
 Kafka_audit_topic="audit_logs"
 Kafka_transaction_topic="transaction"
 
@@ -93,6 +93,8 @@ def verify_token(request: Request)  -> tuple[str, str]:
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
 #Создаем Kafka_Producer
 def create_kafka_producer():
     try:
@@ -131,6 +133,10 @@ class TransactionNew(BaseModel):
 class LoginPass(BaseModel):
     login: str
     password: str
+
+#def write_invalid_transaction():
+#доделать функцию записи невалидных транзакций в таблицу.
+#в таблице добавить новые столбцы
 
 
 app = FastAPI()
@@ -359,6 +365,17 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             content={"error": "Вы не можете перевести деньги самому себе"}
         )
 
+    for _ in range(4):  # 3 попытки генерации уникального ID
+        temp_id = secrets.token_urlsafe(16)
+        cur.execute("SELECT id FROM transactions WHERE id = %s", (temp_id,))
+        if not cur.fetchone():
+            transaction_id = temp_id
+            break
+
+
+    if not transaction_id:
+        raise Exception("Failed to generate unique transaction ID")
+
     try:
 
         # 3. Проверка получателя и баланса в одной транзакции
@@ -409,16 +426,6 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
                 status_code=400,
                 content={"error": "Ваш аккаунт ограничен. Свяжитесь со службой поддержки."}
             )
-        # 4. Генерация уникального ID транзакции
-        for _ in range(3):  # 3 попытки генерации уникального ID
-            temp_id = secrets.token_urlsafe(12)
-            cur.execute("SELECT id FROM transactions WHERE id = %s", (temp_id,))
-            if not cur.fetchone():
-                transaction_id = temp_id
-                break
-
-        if not transaction_id:
-            raise Exception("Failed to generate unique transaction ID")
 
         # 5. Выполнение транзакции
         now = datetime.now(timezone.utc)
