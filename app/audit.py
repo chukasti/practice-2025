@@ -58,7 +58,7 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
-SECRET_KEY="_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
+#SECRET_KEY="_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
 # Инициализация
 settings = Settings()
 
@@ -152,18 +152,11 @@ except Exception as e:
 
 
 def get_db_connection():
-    safe_password = quote_plus(settings.postgres_password)
     try:
-        #todo: ПОЧИНИТЕ ЭТОТ ГОВНОКОД, ИЗ-ЗА КОТОРОГО НЕТ ПОДКЛЮЧЕНИЯ К БД
         conn_str = (
-            f"dbname='{quote_plus(settings.postgres_db)}' "
-            f"user='{quote_plus(settings.postgres_user)}' "
-            f"password='{quote_plus(settings.postgres_password)}' "
-            f"host='{quote_plus(settings.postgres_host)}' "
-            f"port='{settings.postgres_port}'"
-        )
-        #conn = psycopg2.connect(conn_str)
-        conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
+            f"dbname='{settings.postgres_db}' user=audit_user password='{settings.postgres_password}' host=localhost port='{settings.postgres_port}'")
+        conn = psycopg2.connect(conn_str)
+        #conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
         return conn
     except Exception as e:
