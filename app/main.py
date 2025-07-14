@@ -20,8 +20,32 @@ from pathlib import Path
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 import json
+from pydantic_settings import BaseSettings
+from pydantic import Field
 
+class Settings(BaseSettings):
+    secret_key: str = Field(..., env="SECRET_KEY")
+    algorithm: str = Field("HS256", env="ALGORITHM")
+    access_token_expire_minutes: int = Field(20, env="ACCESS_TOKEN_EXPIRE_MINUTES")
 
+    postgres_host: str = Field("db", env="POSTGRES_HOST")
+    postgres_port: int = Field(..., env="POSTGRES_PORT")
+    postgres_db: str = Field(..., env="POSTGRES_DB")
+    postgres_user: str = Field(..., env="POSTGRES_USER")
+    postgres_password: str = Field(..., env="POSTGRES_PASSWORD")
+
+    kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
+    kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
+
+    allowed_hosts: str = Field("127.0.0.1,localhost", env="ALLOWED_HOSTS")
+    allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "allow"
+
+settings = Settings()
 
 #Настройка кафки
 Kafka_bootstrap_servers="localhost:9092"
@@ -123,7 +147,7 @@ async def send_kafka(topic, massage):
         logger.error(f"Failed to send massage to kafka: {str(e)}")
         return False
 
-conn = psycopg2.connect("dbname=postgres_db port=5430 host=localhost user=postgres_user password=postgres_password")
+conn = psycopg2.connect(f"dbname={settings.postgres_db} port=5430 host=localhost user={settings.postgres_user} password={settings.postgres_password}")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
 class TransactionNew(BaseModel):
