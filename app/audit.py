@@ -33,29 +33,26 @@ logger.addHandler(handler)
 load_dotenv()
 
 class Settings(BaseSettings):
-    # ── JWT / FastAPI ─────────────────────────────────────────
     secret_key: str = Field(..., env="SECRET_KEY")
     algorithm: str = Field("HS256", env="ALGORITHM")
     access_token_expire_minutes: int = Field(20, env="ACCESS_TOKEN_EXPIRE_MINUTES")
 
-    # ── PostgreSQL ────────────────────────────────────────────
-    postgres_host: str = Field("db", env="POSTGRES_HOST")
-    postgres_port: int = Field(5433, env="POSTGRES_PORT")
-    postgres_db: str = Field(..., env="POSTGRES_DB")
-    postgres_user: str = Field(..., env="POSTGRES_USER")
-    postgres_password: str = Field(..., env="POSTGRES_PASSWORD")
+    postgres_audit_host: str = Field("db", env="POSTGRES_AUDIT_HOST")
+    postgres_audit_port: int = Field(..., env="POSTGRES_AUDIT_PORT")
+    postgres_audit_db: str = Field(..., env="POSTGRES_AUDIT_DB")
+    postgres_audit_user: str = Field(..., env="POSTGRES_AUDIT_USER")
+    postgres_audit_password: str = Field(..., env="POSTGRES_AUDIT_PASSWORD")
 
-    # ── Kafka ────────────────────────────────────────────────
     kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
 
-    # ── CORS / ACL ───────────────────────────────────────────
     allowed_hosts: str = Field("127.0.0.1,localhost", env="ALLOWED_HOSTS")
     allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "allow"
 
 
 #SECRET_KEY="_caE+)3J3^8Lb&u$xaPVemEJj8RpV3"
@@ -154,7 +151,7 @@ except Exception as e:
 def get_db_connection():
     try:
         conn_str = (
-            f"dbname='{settings.postgres_db}' user=audit_user password='{settings.postgres_password}' host=localhost port='{settings.postgres_port}'")
+            f"dbname='{settings.postgres_audit_db}' user=audit_user password='{settings.postgres_audit_password}' host=localhost port=5431")
         conn = psycopg2.connect(conn_str)
         #conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
