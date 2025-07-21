@@ -433,48 +433,48 @@ async def home_page(
             )
             username, name_surname, role = cur.fetchone()
     #Получение инцидентов из бд аудита
-#    incidents: List[Incident] = []
-#    try:
-#        with get_db_connection() as conn:
-#            with conn.cursor() as cur:
-#                cur.execute("""
-#                SELECT id, timestamp, account_id, amount, status, source_ip, raw_payload
-#                FROM audit_logs
-#                ORDER BY timestamp DESC
-#                LIMIT %s
-#                """,(20,))
-#                for record in cur:
-#                    incidents.append(Incident(
-#                        id=record[0],
-#                        timestamp=record[1],
-#                        severity=record[2],
-#                        description=record[3],
-#                        status=record[4]
-#                    ))
-#    except Exception as e:
-#        logger.error(f"Failed to fetch incidents from DB: {e}")
-#    return templates.TemplateResponse(
-#        "home.html",
-#        {
-#            "request": request,
-#            "fullname": name_surname,
-#            "role": role,
-#            "incidents": incidents,
-#            "csrf_token": get_csrf_token(request)
-#        }
-#    )
+    incidents: List[Incident] = []
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                SELECT id, timestamp, account_id, amount, status, source_ip, raw_payload
+                FROM audit_logs
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,(20,))
+                for record in cur:
+                    incidents.append(Incident(
+                        id=record[0],
+                        timestamp=record[1],
+                        severity=record[2],
+                        description=record[3],
+                        status=record[4]
+                    ))
+    except Exception as e:
+        logger.error(f"Failed to fetch incidents from DB: {e}")
+    return templates.TemplateResponse(
+        "home.html",
+        {
+            "request": request,
+            "fullname": name_surname,
+            "role": role,
+            "incidents": incidents,
+            "csrf_token": get_csrf_token(request)
+        }
+    )
 
 
 
     # Получение инцидентов из Kafka
-    incidents: List[Incident] = []
-    try:
-        for _ in range(5):
-            msg = next(kafka_consumer)
-            if msg:
-                incidents.append(Incident(**msg.value))
-    except StopIteration:
-        pass
+#    incidents: List[Incident] = []
+#    try:
+#        for _ in range(5):
+#            msg = next(kafka_consumer)
+#            if msg:
+#                incidents.append(Incident(**msg.value))
+#    except StopIteration:
+#        pass
     #todo: события должны читаться из БД аудита, потому что...
     #todo: ...main app передает логи в кафку, кафка передаёт логи в ...
     #todo: ...БД аудита.
