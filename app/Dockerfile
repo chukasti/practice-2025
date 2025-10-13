@@ -8,4 +8,4 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4"]

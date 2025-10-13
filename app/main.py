@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
 
-    allowed_hosts: str = Field("127.0.0.1,localhost", env="ALLOWED_HOSTS")
+    allowed_hosts: str = Field("127.0.0.1,localhost,0.0.0.0", env="ALLOWED_HOSTS")
     allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
 
     class Config:
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 #Настройка кафки
-Kafka_bootstrap_servers="localhost:9092"
+Kafka_bootstrap_servers="kafka:9092"
 Kafka_audit_topic="audit_logs"
 Kafka_transaction_topic="transaction"
 
@@ -147,7 +147,7 @@ async def send_kafka(topic, massage):
         logger.error(f"Failed to send massage to kafka: {str(e)}")
         return False
 
-conn = psycopg2.connect(f"dbname={settings.postgres_db} port=5430 host=localhost user={settings.postgres_user} password={settings.postgres_password}")
+conn = psycopg2.connect(f"dbname={settings.postgres_db} port=5432 host=postgres_container user={settings.postgres_user} password={settings.postgres_password}")
 #При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
 class TransactionNew(BaseModel):
@@ -201,7 +201,7 @@ async def auth_exception_handler(request: Request, exc: HTTPException):
     # остальные HTTPException передаём дальше
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/templates", StaticFiles(directory="templates"), name="templates")
 
 templates = Jinja2Templates(directory="templates")
 

@@ -4,8 +4,8 @@ services:
   backend:
     build:
       context: ./app
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     container_name: backend
     env_file: .env
     networks:
@@ -55,11 +55,10 @@ services:
       POSTGRES_USER: audit_user
       POSTGRES_PASSWORD: audit_password
       POSTGRES_DB: audit_db
-      PGDATA: /var/lib/postgresql/data/pgdata_audit
     ports:
       - "5431:5432"
     volumes:
-      - ./pgdata_audit:/var/lib/postgresql/data/pgdata_audit
+      - ./pgdata_audit:/var/lib/postgresql/data/pgdata
     deploy:
       resources:
         limits:
@@ -89,6 +88,7 @@ services:
 
   zookeeper:
     image: zookeeper:latest
+    container_name: zookeeper
     ports:
       - "2181:2181"
     environment:
@@ -100,6 +100,7 @@ services:
     image: confluentinc/cp-kafka:7.6.1
     ports:
       - "9092:9092"
+    container_name: kafka
     environment:
       - KAFKA_BROKER_ID=1
       - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
