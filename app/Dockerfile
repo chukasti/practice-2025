@@ -7,7 +7,6 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
-RUN chmod +x entrypoint.sh
 CMD ["sh", "-c", "\
   sleep 5 && \
   cd /app/alembic_audit && alembic upgrade head && \

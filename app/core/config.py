@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     postgres_password: str = Field(..., env="POSTGRES_PASSWORD")
 
     kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
-    kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
+    kafka_transaction_topic: str = Field("incidents", env="KAFKA_TOPIC")
 
     allowed_hosts: str = Field("127.0.0.1,localhost,0.0.0.0", env="ALLOWED_HOSTS")
     allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
