@@ -160,8 +160,9 @@ class LoginPass(BaseModel):
 
 
 class TestRegistry(BaseModel):
-    login: str
-    password: str
+    user_id: str
+    hashed_password: str
+    username: str
     role: str
     name_surname: str
     balance: str
@@ -434,8 +435,33 @@ def try_login(auth: LoginPass, request: Request):
 
 
 @app.post("/api/register")
-async def test_registry():
+async def test_registry(user: TestRegistry):
+    try:
+        cur = conn.cursor()
 
+        insert_query = psycopg2.SQL("""
+               INSERT INTO public.users (user_id, hashed_password, username, role, name_surname, balance, account_status)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+           """)
+
+        cur.execute(insert_query, (
+            user.user_id,
+            user.hashed_password,
+            user.username,
+            user.role,
+            user.name_surname,
+            user.balance,
+            user.account_status
+        ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "success", "message": "User registered successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     pass
 
 
