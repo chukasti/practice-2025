@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 import secrets
 import psycopg2
 import threading
-from audit_consumer import start_consumer  # импорт скрипта consumer
+from audit_consumer.start_consumer import start_consumer  # импорт скрипта consumer
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 

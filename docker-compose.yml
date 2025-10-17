@@ -8,6 +8,11 @@ services:
       - "8000:8000"
     container_name: backend
     env_file: .env
+    depends_on:
+      - postgres
+      - kafka
+      - zookeeper
+      - postgres_audit
     networks:
       - "appnet"
     
