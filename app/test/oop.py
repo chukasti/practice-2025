@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from datetime import datetime
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
-from jose import JWTError, jwt
+from balagan import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 

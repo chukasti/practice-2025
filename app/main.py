@@ -4,11 +4,13 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import secrets
 import psycopg2
-from fastapi.responses import FileResponse, JSONResponse
+import threading
+from audit_consumer import start_consumer  # импорт скрипта consumer
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-#from models.transaction import Transaction
-#from api.v1.transactions import TransactionCreate
-from datetime import datetime
+
+# from models.transaction import Transaction
+# from api.v1.transactions import TransactionCreate
 from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
@@ -20,39 +22,16 @@ from pathlib import Path
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 import json
-from pydantic_settings import BaseSettings
-from pydantic import Field
 
-class Settings(BaseSettings):
-    secret_key: str = Field(..., env="SECRET_KEY")
-    algorithm: str = Field("HS256", env="ALGORITHM")
-    access_token_expire_minutes: int = Field(20, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+from core.config import settings
 
-    postgres_host: str = Field("db", env="POSTGRES_HOST")
-    postgres_port: int = Field(..., env="POSTGRES_PORT")
-    postgres_db: str = Field(..., env="POSTGRES_DB")
-    postgres_user: str = Field(..., env="POSTGRES_USER")
-    postgres_password: str = Field(..., env="POSTGRES_PASSWORD")
+# Настройка кафки
+Kafka_bootstrap_servers = "kafka:9092"
+Kafka_audit_topic = "audit_logs"
+Kafka_transaction_topic = "transaction"
 
-    kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
-    kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
 
-    allowed_hosts: str = Field("127.0.0.1,localhost,0.0.0.0", env="ALLOWED_HOSTS")
-    allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "allow"
-
-settings = Settings()
-
-#Настройка кафки
-Kafka_bootstrap_servers="kafka:9092"
-Kafka_audit_topic="audit_logs"
-Kafka_transaction_topic="transaction"
-
-#Настройка логгера
+# Настройка логгера
 def setup_logger():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -61,15 +40,15 @@ def setup_logger():
     logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     file_handler = RotatingFileHandler(
         filename=log_dir / "transactions.log",
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=5,
-        encoding='utf-8'
+        encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
 
@@ -90,16 +69,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 20
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 #!!!ОБЯЗАТЕЛЬНО СЕКРЕТНЫЙ КЛЮЧ УБРАТЬ ИЗ КОДА В ENVIRONMENT!!!
 
+
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
-def verify_token(request: Request)  -> tuple[str, str]:
+def verify_token(request: Request) -> tuple[str, str]:
     token = request.cookies.get("session_id")
     if not token:
         raise HTTPException(status_code=303, headers={"Location": "/login"})
@@ -111,7 +92,7 @@ def verify_token(request: Request)  -> tuple[str, str]:
             raise JWTError()
         return user_id, true_user_id
     except JWTError:
-        logger.warning('Invalid or expired token')
+        logger.warning("Invalid or expired token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -119,77 +100,113 @@ def verify_token(request: Request)  -> tuple[str, str]:
         )
 
 
-#Создаем Kafka_Producer
+# Создаем Kafka_Producer
 def create_kafka_producer():
     try:
         producer = KafkaProducer(
             bootstrap_servers=Kafka_bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-            acks='all',
+            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            acks="all",
             retries=3,
             max_in_flight_requests_per_connection=1,
             request_timeout_ms=30000,
-            linger_ms=5
+            linger_ms=5,
         )
         return producer
     except Exception as e:
         logger.error(f"Failed to create Kafka producer: {str(e)}")
+
+
 producer = create_kafka_producer()
+
+
 async def send_kafka(topic, massage):
     try:
         future = producer.send(topic, value=massage)
         metadata = future.get(timeout=10)
-        logger.info(f"Message sent to Kafka: topic = {metadata.topic}, "
-                    f"partition = {metadata.partition}, "
-                    f"offest = {metadata.offset}")
+        logger.info(
+            f"Message sent to Kafka: topic = {metadata.topic}, "
+            f"partition = {metadata.partition}, "
+            f"offest = {metadata.offset}"
+        )
         return True
-    except  KafkaError as e:
+    except KafkaError as e:
         logger.error(f"Failed to send massage to kafka: {str(e)}")
         return False
 
-conn = psycopg2.connect(f"dbname={settings.postgres_db} port=5432 host=postgres_container user={settings.postgres_user} password={settings.postgres_password}")
-#При установке в докер - поставить надежные данные для аутентификации
+
+def run_consumer():
+    start_consumer()
+
+
+consumer_thread = threading.Thread(target=run_consumer, daemon=True)
+consumer_thread.start()
+
+conn = psycopg2.connect(
+    f"dbname={settings.postgres_db} port=5432 host=postgres_container user={settings.postgres_user} password={settings.postgres_password}"
+)
+# При установке в докер - поставить надежные данные для аутентификации
 cur = conn.cursor()
+
+
 class TransactionNew(BaseModel):
     amount: int
     receiver_id: str
+
 
 class LoginPass(BaseModel):
     login: str
     password: str
 
-#def write_invalid_transaction():
-#доделать функцию записи невалидных транзакций в таблицу.
-#в таблице добавить новые столбцы
+
+class TestRegistry(BaseModel):
+    login: str
+    password: str
+    role: str
+    name_surname: str
+    balance: str
+    account_status: str
+
+
+# def write_invalid_transaction():
+# доделать функцию записи невалидных транзакций в таблицу.
+# в таблице добавить новые столбцы
 
 
 app = FastAPI()
+app.mount("/templates", StaticFiles(directory="templates"), name="templates")
+
+templates = Jinja2Templates(directory="templates", auto_reload=True)
+
 
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: HTTPException):
     logger.warning(f"404 Not Found: {request.url}")
     return templates.TemplateResponse(
         "error.html",
-        {"request": request, "error": "Страница не найдена", "code" : 404},
-        status_code=404
+        {"request": request, "error": "Страница не найдена", "code": 404},
+        status_code=404,
     )
+
 
 @app.exception_handler(500)
 async def server_error_handler(request: Request, exc: HTTPException):
     logger.warning(f"500 Server Error: {str(exc)}")
     return templates.TemplateResponse(
         "error.html",
-        {"request": request, "error": "Внутренняя ошибка сервера", "code" : 500},
-        status_code=500
+        {"request": request, "error": "Внутренняя ошибка сервера", "code": 500},
+        status_code=500,
     )
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.warning(f"Validation error: {exc.errors()}")
     return JSONResponse(
         status_code=422,
-        content={"error": "Некорректные данные", "details" : str(exc)},
+        content={"error": "Некорректные данные", "details": str(exc)},
     )
+
 
 @app.exception_handler(401)
 async def auth_exception_handler(request: Request, exc: HTTPException):
@@ -201,10 +218,6 @@ async def auth_exception_handler(request: Request, exc: HTTPException):
     # остальные HTTPException передаём дальше
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
-app.mount("/templates", StaticFiles(directory="templates"), name="templates")
-
-templates = Jinja2Templates(directory="templates")
-
 
 @app.get("/favicon.ico")
 def read_favicon():
@@ -215,19 +228,26 @@ def read_favicon():
 def read_root(request: Request):
     return RedirectResponse("/home")
 
+
 @app.get("/images/image1.jpg")
 def read_image():
     return FileResponse(path="images/image1.jpg")
+
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if request.cookies.get("session_id") is not None:
         return RedirectResponse("/home")
-    logger.debug('Accessing login page')
+    logger.debug("Accessing login page")
     return templates.TemplateResponse("login.html", {"request": request})
 
+
 @app.post("/api/logout")
-async def logout(response: Response, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
+async def logout(
+    response: Response,
+    request: Request,
+    token_data: tuple[str, str] = Depends(verify_token),
+):
     try:
         user_id, true_user_id = token_data
         token = request.cookies.get("session_id")
@@ -242,32 +262,41 @@ async def logout(response: Response, request: Request, token_data: tuple[str, st
         logger.error(f"Logout error: {str(e)}")
         raise
 
+
 @app.get("/send_money", response_class=HTMLResponse)
-def panel_page(request: Request, token_data: tuple[str, str] = Depends(verify_token),
+def panel_page(
+    request: Request,
+    token_data: tuple[str, str] = Depends(verify_token),
 ):
     user_id, true_user_id = token_data
-    cur.execute("SELECT username, name_surname, balance FROM users WHERE username = %s", (user_id,))
+    cur.execute(
+        "SELECT username, name_surname, balance FROM users WHERE username = %s",
+        (user_id,),
+    )
     row = cur.fetchone()
     user_id = row[0]
     name_surname = row[1]
     balance = row[2]
     if user_id is not None and name_surname:
-        return templates.TemplateResponse("sending_page.html", {
-            "request": request,
-            "fullname": name_surname,
-            "balance": balance
-        })
+        return templates.TemplateResponse(
+            "sending_page.html",
+            {"request": request, "fullname": name_surname, "balance": balance},
+        )
     logger.warning("user_id or name_surname is empty")
     return RedirectResponse("/login")
 
 
-
 @app.get("/home", response_class=HTMLResponse)
-def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_token),
+def home_page(
+    request: Request,
+    token_data: tuple[str, str] = Depends(verify_token),
 ):
     user_id, true_user_id = token_data
     try:
-        cur.execute("SELECT username, name_surname, balance, account_status FROM users WHERE username = %s", (user_id,))
+        cur.execute(
+            "SELECT username, name_surname, balance, account_status FROM users WHERE username = %s",
+            (user_id,),
+        )
         row = cur.fetchone()
         if not row:
             logger.error(f"User {user_id} not found in database")
@@ -281,66 +310,100 @@ def home_page(request: Request, token_data: tuple[str, str] = Depends(verify_tok
 
         logger.debug(f"User {user_id} accessing home page")
 
-        return templates.TemplateResponse("home.html", {
-            "request": request,
-            "fullname": name_surname,
-            "balance": balance,
-            "restrict_warning": restrict_warning
-        })
+        return templates.TemplateResponse(
+            "home.html",
+            {
+                "request": request,
+                "fullname": name_surname,
+                "balance": balance,
+                "restrict_warning": restrict_warning,
+            },
+        )
     except Exception as e:
         logger.error(f"Home page error: {str(e)}")
         raise
+
 
 @app.post("/api/login")
 def try_login(auth: LoginPass, request: Request):
     try:
         if auth.login and auth.password:
             now = datetime.now(timezone.utc)
-            cur.execute("SELECT hashed_password, user_id FROM users WHERE username = %s", (auth.login,))
+            try:
+                cur.execute(
+                    "SELECT hashed_password, user_id FROM users WHERE username = %s",
+                    (auth.login,),
+                )
+            except psycopg2.Error as e:
+                conn.rollback()
+                logger.error(f"DB error: {e}")
+                raise
             row = cur.fetchone()
             if not row:
                 logger.warning(f"Failed login attempt - user not found: {auth.login}")
-                return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+                return RedirectResponse(
+                    url="/login", status_code=status.HTTP_403_FORBIDDEN
+                )
             stored_hash = row[0]
             true_user_id = row[1]
-            cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+            cur.execute(
+                "SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s",
+                (true_user_id,),
+            )
             check_brute = cur.fetchone()
             if check_brute:
                 attempt_time = check_brute[1]
                 attempt_number = check_brute[2]
                 if now - attempt_time >= timedelta(minutes=20):
-                    cur.execute("DELETE FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+                    cur.execute(
+                        "DELETE FROM bruteforce_protect WHERE user_id = %s",
+                        (true_user_id,),
+                    )
                     conn.commit()
 
                 # 2) иначе, если попыток уже >= 5 — блокировка
                 elif attempt_number >= 5:
                     logger.warning(f"User overreached attempts of login")
-                    return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
+                    return RedirectResponse(
+                        url="/login", status_code=status.HTTP_403_FORBIDDEN
+                    )
 
             if not pwd_context.verify(auth.password, stored_hash):
-                logger.warning(f"Failed login attempt - invalid password for user: {auth.login}")
-                cur.execute("SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s", (true_user_id,))
+                logger.warning(
+                    f"Failed login attempt - invalid password for user: {auth.login}"
+                )
+                cur.execute(
+                    "SELECT user_id, last_attempt, attempt_value FROM bruteforce_protect WHERE user_id = %s",
+                    (true_user_id,),
+                )
                 brute_row = cur.fetchone()
                 if brute_row:
                     kk, last_attempt, attempt_value = brute_row
-                    cur.execute("UPDATE bruteforce_protect SET last_attempt = %s, attempt_value = %s WHERE user_id = %s",(now, attempt_value+1, true_user_id))
+                    cur.execute(
+                        "UPDATE bruteforce_protect SET last_attempt = %s, attempt_value = %s WHERE user_id = %s",
+                        (now, attempt_value + 1, true_user_id),
+                    )
                     conn.commit()
                 else:
-                    cur.execute("INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)", (true_user_id, now, 1))
+                    cur.execute(
+                        "INSERT INTO bruteforce_protect (user_id, last_attempt, attempt_value) VALUES (%s, %s, %s)",
+                        (true_user_id, now, 1),
+                    )
                     conn.commit()
-                #cur.execute("INSERT INTO bruteforce_protect user_id, last_attempt, attempt_value WHERE user_id = %s", (true_user_id,))
-                #brute = cur.fetchone()
+                # cur.execute("INSERT INTO bruteforce_protect user_id, last_attempt, attempt_value WHERE user_id = %s", (true_user_id,))
+                # brute = cur.fetchone()
 
-
-                return RedirectResponse(url="/login", status_code=status.HTTP_403_FORBIDDEN)
-            #cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
-            #conn.commit()
+                return RedirectResponse(
+                    url="/login", status_code=status.HTTP_403_FORBIDDEN
+                )
+            # cur.execute("INSERT INTO transactions (id, amount, timestamp, account_id, merchant_id, status) VALUES (%s, %s, %s, %s, %s, %s)", (tx.id, tx.amount, tx.timestamp, tx.account_id, tx.receiver_id, tx.status) )
+            # conn.commit()
             expires_at = datetime.utcnow() + timedelta(minutes=20)
             payload = {
                 "userid": auth.login,
                 "true_userid": true_user_id,
-                "exp": expires_at
-        }
+                "exp": expires_at,
+            }
             token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
             logger.info(f"Successful login: {auth.login}")
             response = RedirectResponse("/home", status_code=status.HTTP_303_SEE_OTHER)
@@ -351,12 +414,12 @@ def try_login(auth: LoginPass, request: Request):
                 max_age=1200,
                 expires=1200,
                 samesite="lax",
-                secure=False
+                secure=False,
             )
 
             cur.execute(
                 "INSERT INTO active_session (userid, token, expires_at) VALUES (%s, %s, %s)",
-                (auth.login, token, expires_at)
+                (auth.login, token, expires_at),
             )
             conn.commit()
 
@@ -370,23 +433,32 @@ def try_login(auth: LoginPass, request: Request):
         raise
 
 
+@app.post("/api/register")
+async def test_registry():
+
+    pass
+
+
 @app.post("/api/transaction")
-async def send_transaction(tx: TransactionNew, request: Request, token_data: tuple[str, str] = Depends(verify_token),):
+async def send_transaction(
+    tx: TransactionNew,
+    request: Request,
+    token_data: tuple[str, str] = Depends(verify_token),
+):
     user_id, true_user_id = token_data
     transaction_id = None
     payload = await request.json()
     if tx.amount <= 0:
         logger.warning(f"Invalid amount from {user_id}: {tx.amount}")
         return JSONResponse(
-            status_code=400,
-            content={"error": "Сумма должна быть положительной"}
+            status_code=400, content={"error": "Сумма должна быть положительной"}
         )
-    
+
     if tx.receiver_id == true_user_id:
         logger.warning(f"Attempt to send money yourself")
         return JSONResponse(
             status_code=400,
-            content={"error": "Вы не можете перевести деньги самому себе"}
+            content={"error": "Вы не можете перевести деньги самому себе"},
         )
 
     for _ in range(4):  # 3 попытки генерации уникального ID
@@ -396,14 +468,14 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             transaction_id = temp_id
             break
 
-
     if not transaction_id:
         raise Exception("Failed to generate unique transaction ID")
 
     try:
 
         # 3. Проверка получателя и баланса в одной транзакции
-        cur.execute("""
+        cur.execute(
+            """
             SELECT
                 u.balance, (r.user_id IS NOT NULL), r.account_status, u.account_status AS receiver_exists
             FROM users AS u
@@ -412,43 +484,49 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             WHERE u.user_id = %s      -- блокируем отправителя
             FOR UPDATE OF u
             """,
-                    (tx.receiver_id, true_user_id)
-                    )
+            (tx.receiver_id, true_user_id),
+        )
 
         result = cur.fetchone()
         if not result:
             logger.warning(f"User not found: {user_id}")
             return JSONResponse(
-                status_code=404,
-                content={"error": "Пользователь не найден"}
+                status_code=404, content={"error": "Пользователь не найден"}
             )
 
         balance, merchant_exists, receiver_account_status, user_account_status = result
         if not merchant_exists:
             logger.warning(f"Invalid merchant: {tx.receiver_id}")
             return JSONResponse(
-                status_code=400,
-                content={"error": "Получатель не найден"}
+                status_code=400, content={"error": "Получатель не найден"}
             )
 
         if balance < tx.amount:
             logger.warning(f"Insufficient funds: {user_id}")
             return JSONResponse(
                 status_code=400,
-                content={"error": "Недостаточно средств", "balance": float(balance)}
+                content={"error": "Недостаточно средств", "balance": float(balance)},
             )
 
         if receiver_account_status != "normal":
-            logger.warning(f"Попытка отправить деньги аккаунту ID {tx.receiver_id} с ограниченными привилегиями")
+            logger.warning(
+                f"Попытка отправить деньги аккаунту ID {tx.receiver_id} с ограниченными привилегиями"
+            )
             return JSONResponse(
                 status_code=400,
-                content={"error": "Аккаунт получателя ограничен. Невозможно отправить деньги."}
+                content={
+                    "error": "Аккаунт получателя ограничен. Невозможно отправить деньги."
+                },
             )
         if user_account_status != "normal":
-            logger.warning(f"Пользователь с ограниченным аккаунтом ID {true_user_id} попытался отправить деньги")
+            logger.warning(
+                f"Пользователь с ограниченным аккаунтом ID {true_user_id} попытался отправить деньги"
+            )
             return JSONResponse(
                 status_code=400,
-                content={"error": "Ваш аккаунт ограничен. Свяжитесь со службой поддержки."}
+                content={
+                    "error": "Ваш аккаунт ограничен. Свяжитесь со службой поддержки."
+                },
             )
 
         # 5. Выполнение транзакции
@@ -456,19 +534,26 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
 
         cur.execute(
             "UPDATE users SET balance = balance - %s WHERE username = %s",
-            (tx.amount, user_id)
+            (tx.amount, user_id),
         )
 
         cur.execute(
             "UPDATE users SET balance = balance + %s WHERE user_id = %s",
-            (tx.amount, tx.receiver_id)
+            (tx.amount, tx.receiver_id),
         )
 
         cur.execute(
             """INSERT INTO transactions 
                (id, amount, timestamp, account_id, merchant_id, status) 
                VALUES (%s, %s, %s, %s, %s, %s)""",
-            (transaction_id, tx.amount, now.isoformat(), true_user_id, tx.receiver_id, "completed")
+            (
+                transaction_id,
+                tx.amount,
+                now.isoformat(),
+                true_user_id,
+                tx.receiver_id,
+                "completed",
+            ),
         )
 
         conn.commit()
@@ -481,7 +566,7 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             "amount": tx.amount,
             "status": "SUCCESS",
             "source_ip": request.client.host,
-            "raw_payload": json.dumps(payload)
+            "raw_payload": json.dumps(payload),
         }
 
         # 3. Отправляем в Kafka
@@ -492,8 +577,8 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             content={
                 "status": "success",
                 "transaction_id": transaction_id,
-                "new_balance": str(balance - tx.amount)
-            }
+                "new_balance": str(balance - tx.amount),
+            },
         )
 
     except psycopg2.DatabaseError as db_error:
@@ -504,15 +589,12 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             "amount": tx.amount,
             "status": "SUCCESS",
             "source_ip": request.client.host,
-            "raw_payload": json.dumps(payload)
+            "raw_payload": json.dumps(payload),
         }
         await send_kafka(Kafka_audit_topic, tx_data)
         conn.rollback()
         logger.error(f"Database error: {str(db_error)}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Ошибка базы данных"}
-        )
+        return JSONResponse(status_code=500, content={"error": "Ошибка базы данных"})
 
     except Exception as e:
         tx_data = {
@@ -522,19 +604,18 @@ async def send_transaction(tx: TransactionNew, request: Request, token_data: tup
             "amount": tx.amount,
             "status": "SUCCESS",
             "source_ip": request.client.host,
-            "raw_payload": json.dumps(payload)
+            "raw_payload": json.dumps(payload),
         }
         await send_kafka(Kafka_audit_topic, tx_data)
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return JSONResponse(
-            status_code=500,
-            content={"error": "Внутренняя ошибка сервера"}
+            status_code=500, content={"error": "Внутренняя ошибка сервера"}
         )
 
     finally:
         try:
             conn.autocommit = True
-            if 'cur' in locals():
+            if "cur" in locals():
                 cur.close()
         except Exception as e:
             logger.error(f"Cleanup error: {str(e)}")

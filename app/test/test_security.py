@@ -1,6 +1,6 @@
 import pytest
 from fastapi import HTTPException
-from jose import jwt
+from balagan import jwt
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 

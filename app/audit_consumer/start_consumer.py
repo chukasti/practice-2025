@@ -3,7 +3,7 @@ import psycopg2
 import json
 import threading
 from datetime import datetime
-from app.main import settings  # импортируй свою конфигурацию
+from core.config import settings
 import logging
 
 logger = logging.getLogger("audit_consumer")

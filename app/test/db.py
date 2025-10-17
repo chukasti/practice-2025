@@ -1,5 +1,5 @@
 from datetime import timedelta, datetime
-from jose import jwt
+from balagan import jwt
 
 
 

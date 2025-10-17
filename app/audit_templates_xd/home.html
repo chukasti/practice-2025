@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Панель Аудита</title>
+</head>
+<body>
+    <h1>Добро пожаловать, {{ fullname }}</h1>
+    <p>Ваша роль: {{ role }}</p>
+
+    {% if role != "auditor" %}
+        <p style="color:red;">Права доступа ограничены. Обратитесь к администратору.</p>
+    {% endif %}
+
+    <h2>Последние инциденты:</h2>
+    {% if incidents %}
+        <ul>
+        {% for incident in incidents %}
+            <li>
+                <strong>Time:</strong> {{ incident.timestamp }} |
+                <strong>User:</strong> {{ incident.user_id }} |
+                <strong>Type:</strong> {{ incident.event_type }} |
+                <strong>IP:</strong> {{ incident.source_ip }}
+            </li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <p>Нет новых инцидентов.</p>
+    {% endif %}
+
+    <!-- Прим
