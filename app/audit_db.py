@@ -1,5 +1,7 @@
 import os
 import secrets
+import threading
+from collections import deque
 from urllib.parse import quote_plus
 import ipaddress
 from dotenv import load_dotenv
@@ -47,7 +49,7 @@ class Settings(BaseSettings):
     postgres_audit_password: str = Field(..., env="POSTGRES_AUDIT_PASSWORD")
 
     kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
-    kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
+    kafka_topic: str = Field("transaction", env="KAFKA_TOPIC")
 
     allowed_hosts: str = Field("127.0.0.1,0.0.0.0", env="ALLOWED_HOSTS")
     allowed_ips: str = Field("127.0.0.1,192.168.1.0/24,0.0.0.0/0", env="ALLOWED_IPS")
@@ -130,23 +132,29 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # Подключение к Kafka
-try:
-    kafka_consumer = KafkaConsumer(
-        settings.kafka_topic,
-        bootstrap_servers=settings.kafka_bootstrap_servers.split(","),
-        value_deserializer=lambda x: json.loads(x.decode("utf-8")),
-        auto_offset_reset="earliest",
-        enable_auto_commit=False,
-        consumer_timeout_ms=1000,
-    )
-except Exception as e:
-    logger.error(f"Failed to connect to Kafka: {e}")
-    raise
+kafka_consumer = KafkaConsumer(
+    settings.kafka_topic,
+    bootstrap_servers=settings.kafka_bootstrap_servers.split(","),
+    group_id="audit_consumer",
+    auto_offset_reset="earliest",
+    enable_auto_commit=True,  # авто-коммит оффсетов
+    value_deserializer=lambda x: json.loads(x.decode("utf-8")),
+)
+
+# Очередь последних сообщений
+MAX_INCIDENTS = 50
+incident_buffer = deque(maxlen=MAX_INCIDENTS)
+
+def kafka_listener():
+    for msg in kafka_consumer:
+        incident_buffer.append(msg.value)
+
+threading.Thread(target=kafka_listener, daemon=True).start()
 
 
 def get_db_connection():
     try:
-        conn_str = f"dbname='{settings.postgres_audit_db}' user=audit_user password='{settings.postgres_audit_password}' host=localhost port=5431"
+        conn_str = f"dbname='{settings.postgres_audit_db}' user=audit_user password='{settings.postgres_audit_password}' host=audit_container port=5432"
         conn = psycopg2.connect(conn_str)
         # conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
@@ -413,52 +421,19 @@ async def home_page(
                 (user_id,),
             )
             username, name_surname, role = cur.fetchone()
-    # Получение инцидентов из бд аудита
-    incidents: List[Incident] = []
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                SELECT id, timestamp, account_id, amount, status, source_ip, raw_payload
-                FROM audit_logs
-                ORDER BY timestamp DESC
-                LIMIT %s
-                """,
-                    (20,),
-                )
-                for record in cur:
-                    incidents.append(
-                        Incident(
-                            id=record[0],
-                            timestamp=record[1],
-                            severity=record[2],
-                            description=record[3],
-                            status=record[4],
-                        )
-                    )
-    except Exception as e:
-        logger.error(f"Failed to fetch incidents from DB: {e}")
-    return templates.TemplateResponse(
-        "home.html",
-        {
-            "request": request,
-            "fullname": name_surname,
-            "role": role,
-            "incidents": incidents,
-            "csrf_token": get_csrf_token(request),
-        },
-    )
 
-    # Получение инцидентов из Kafka
-    #    incidents: List[Incident] = []
-    #    try:
-    #        for _ in range(5):
-    #            msg = next(kafka_consumer)
-    #            if msg:
-    #                incidents.append(Incident(**msg.value))
-    #    except StopIteration:
-    #        pass
+    # # Получение инцидентов из Kafka
+    # incidents: List[Incident] = []
+    # msgs = kafka_consumer.poll(timeout_ms=5000)
+    #
+    # try:
+    #     for tp, records in msgs.items():
+    #         for record in records:
+    #             incidents.append(record.value)
+    #     kafka_consumer.commit()
+    #
+    # except StopIteration:
+    #     pass
     # todo: события должны читаться из БД аудита, потому что...
     # todo: ...main app передает логи в кафку, кафка передаёт логи в ...
     # todo: ...БД аудита.
@@ -469,7 +444,7 @@ async def home_page(
             "request": request,
             "fullname": name_surname,
             "role": role,
-            "incidents": incidents,
+            "incidents": incident_buffer,
             "csrf_token": get_csrf_token(request),
         },
     )

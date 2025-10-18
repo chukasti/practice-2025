@@ -146,7 +146,7 @@ except Exception as e:
 
 def get_db_connection():
     try:
-        conn_str = f"dbname='{settings.postgres_audit_db}' user=audit_user password='{settings.postgres_audit_password}' host=localhost port=5431"
+        conn_str = f"dbname='{settings.postgres_audit_db}' user=audit_user password='{settings.postgres_audit_password}' host=audit_container port=5432"
         conn = psycopg2.connect(conn_str)
         # conn = psycopg2.connect("dbname=audit_db port=5431 host=localhost user=audit_user password=audit_password")
         conn.autocommit = False
