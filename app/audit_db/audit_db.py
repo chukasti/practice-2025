@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = Field("kafka:9092", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_topic: str = Field("incidents", env="KAFKA_TOPIC")
 
-    allowed_hosts: str = Field("127.0.0.1,0.0.0.0", env="ALLOWED_HOSTS")
-    allowed_ips: str = Field("127.0.0.1,192.168.1.0/24,0.0.0.0/0", env="ALLOWED_IPS")
+    allowed_hosts: str = Field("127.0.0.1,localhost", env="ALLOWED_HOSTS")
+    allowed_ips: str = Field("127.0.0.1,192.168.1.0/24", env="ALLOWED_IPS")
 
     class Config:
         env_file = ".env"
@@ -169,8 +169,8 @@ class Incident(BaseModel):
     status: str
 
 
-templates = Jinja2Templates(directory="audit_templates")
-app.mount("/static", StaticFiles(directory="audit_templates"), name="static")
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # --- Вспомогательные функции ---
@@ -237,11 +237,10 @@ async def check_local_network(request: Request, call_next):
             ipaddress.ip_address(client_ip) in ipaddress.ip_network(net)
             for net in allowed_networks
         ):
-            pass
-            # logger.warning(f"Blocked non-local access attempt from {client_ip}")
-            # raise HTTPException(
-            #     status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
-            # )
+            logger.warning(f"Blocked non-local access attempt from {client_ip}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
+            )
     except ValueError as e:
         logger.error(f"Invalid IP address: {client_ip} - {e}")
         raise HTTPException(
